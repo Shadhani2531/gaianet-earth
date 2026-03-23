@@ -1,5 +1,41 @@
 import random
+import requests
 from datetime import datetime, timedelta
+
+WAQI_TOKEN = "c9b347631e0730d344f9c49101767d214d8e8ff2"
+
+def generate_environment_data(lat: float, lon: float):
+    """
+    Fetches real air quality data from AQICN (WAQI).
+    Falls back to mock data on error or invalid token.
+    """
+    # Default mock values
+    aqi = random.randint(20, 300)
+    temp = round(random.uniform(15.0, 35.0), 1)
+    
+    url = f"https://api.waqi.info/feed/geo:{lat};{lon}/?token={WAQI_TOKEN}"
+    try:
+        response = requests.get(url, timeout=5)
+        response.raise_for_status()
+        data = response.json()
+        
+        if data.get("status") == "ok":
+            aqi_val = data["data"].get("aqi")
+            if aqi_val != "-" and aqi_val is not None:
+                aqi = int(aqi_val)
+                
+            iaqi = data["data"].get("iaqi", {})
+            if "t" in iaqi:
+                temp = float(iaqi["t"]["v"])
+    except Exception as e:
+        print(f"WAQI API Error (using mock instead): {e}")
+
+    return {
+        "temperature_c": temp,
+        "air_quality_index": aqi,
+        "co2_ppm": random.randint(380, 450),
+        "location": {"lat": lat, "lon": lon}
+    }
 
 def get_base_coordinates():
     # Roughly the center of India for initial viewport, but generate globally

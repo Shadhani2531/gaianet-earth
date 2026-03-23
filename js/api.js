@@ -19,6 +19,10 @@ class ApiService {
         return this.get('/environment', { lat, lon });
     }
 
+    async getShi(lat, lon) {
+        return this.get('/shi', { lat, lon });
+    }
+
     async getWeather(lat, lon) {
         return this.get('/weather', { lat, lon });
     }
@@ -37,6 +41,14 @@ class ApiService {
 
     async getPrediction(scenario, lat, lon) {
         return this.get('/prediction', { scenario, lat, lon });
+    }
+
+    async getStations() {
+        return this.get('/stations');
+    }
+
+    async getShiIndiaLive() {
+        return this.get('/shi-india-live');
     }
 }
 

@@ -4,10 +4,8 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     // Trigger default state
     setTimeout(() => {
-        // Load initial sensors
-        document.getElementById('layer-sensors').dispatchEvent(new Event('change'));
-        
-        // Load initial analytics for center point India
+        // Initial visual state
+        console.log("Triggering initial analytics for India...");
         globe.loadLocationAnalytics(CONFIG.DEFAULT_COORDINATES.lat, CONFIG.DEFAULT_COORDINATES.lon);
-    }, 1000);
+    }, 2000);
 });

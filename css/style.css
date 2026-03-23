@@ -71,6 +71,7 @@ h1, h2, h3, h4 {
     letter-spacing: 0.5px;
     background: linear-gradient(90deg, #38bdf8, #818cf8);
     -webkit-background-clip: text;
+    background-clip: text;
     -webkit-text-fill-color: transparent;
 }
 
@@ -427,6 +428,7 @@ input:checked ~ .label-text i {
 
 .timeline-slider {
     -webkit-appearance: none;
+    appearance: none;
     width: 100%;
     height: 4px;
     background: #334155;
@@ -504,6 +506,89 @@ input:checked ~ .label-text i {
     margin-top: 10px;
 }
 
+/* --- IMMERSIVE MODE (SCREEN 1) --- */
+body.minimal-mode .panel,
+body.minimal-mode .top-nav:not(:has(#minimal-toggle)),
+body.minimal-mode .bottom-panel {
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.5s ease;
+}
+
+body.minimal-mode .top-nav {
+    background: transparent;
+    border: none;
+    pointer-events: none;
+}
+
+body.minimal-mode .logo, 
+body.minimal-mode .nav-controls > *:not(#minimal-toggle) {
+    display: none;
+}
+
+body.minimal-mode #minimal-toggle {
+    pointer-events: auto;
+    position: fixed;
+    top: 20px;
+    right: 20px;
+    z-index: 1000;
+    background: rgba(16, 18, 27, 0.8);
+    border: 1px solid var(--accent-color);
+    box-shadow: 0 0 15px rgba(56, 189, 248, 0.4);
+}
+
+/* --- CINEMATIC INSIGHTS (SCREEN 2) --- */
+.insight-card {
+    position: absolute;
+    bottom: 100px;
+    right: -400px; /* Hidden initially */
+    width: 380px;
+    padding: 24px;
+    border-radius: 16px;
+    z-index: 500;
+    transition: right 0.6s cubic-bezier(0.19, 1, 0.22, 1);
+}
+
+.insight-card.active {
+    right: 20px;
+}
+
+.insight-card h3 {
+    font-size: 1.4rem;
+    margin-bottom: 20px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+
+.insight-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 15px;
+    margin-bottom: 25px;
+}
+
+.data-node {
+    background: rgba(255, 255, 255, 0.05);
+    padding: 12px;
+    border-radius: 10px;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.data-node .label {
+    display: block;
+    font-size: 0.7rem;
+    color: var(--text-secondary);
+    text-transform: uppercase;
+    margin-bottom: 4px;
+}
+
+.data-node .value {
+    font-size: 1.2rem;
+    font-weight: 700;
+    color: var(--accent-color);
+}
+
 /* Custom Scrollbar */
 ::-webkit-scrollbar {
     width: 6px;
@@ -525,4 +610,230 @@ input:checked ~ .label-text i {
 /* Cesium Customizations overrides */
 .cesium-widget-credits {
     display: none !important; /* Hide default credits for cleaner dashboard look */
+}
+/* Time Intelligence Panel */
+#time-panel {
+    position: absolute;
+    bottom: 40px;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 600px;
+    padding: 20px;
+    z-index: 100;
+    display: flex;
+    flex-direction: column;
+    gap: 15px;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.time-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+.time-header h3 {
+    margin: 0;
+    font-size: 1rem;
+    color: var(--accent-color);
+    text-transform: uppercase;
+    letter-spacing: 1px;
+}
+
+#current-date-display {
+    font-weight: 600;
+    font-size: 1.1rem;
+}
+
+.slider-container {
+    padding: 0 10px;
+}
+
+#time-slider {
+    width: 100%;
+    height: 6px;
+    background: rgba(255, 255, 255, 0.1);
+    border-radius: 5px;
+    appearance: none;
+    cursor: pointer;
+}
+
+#time-slider::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 18px;
+    height: 18px;
+    background: var(--accent-color);
+    border-radius: 50%;
+    box-shadow: 0 0 10px var(--accent-color);
+    transition: transform 0.2s;
+}
+
+#time-slider::-webkit-slider-thumb:hover {
+    transform: scale(1.2);
+}
+
+.slider-marks {
+    display: flex;
+    justify-content: space-between;
+    margin-top: 8px;
+    font-size: 0.75rem;
+    color: var(--text-muted);
+}
+
+/* Legend Styling */
+.legend-container {
+    margin-top: 20px;
+    padding-top: 20px;
+    border-top: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.legend-item {
+    margin-bottom: 12px;
+}
+
+.legend-label {
+    font-size: 0.75rem;
+    margin-bottom: 5px;
+    color: var(--text-muted);
+    display: block;
+}
+
+.gradient-bar {
+    height: 8px;
+    width: 100%;
+    border-radius: 4px;
+    margin-bottom: 3px;
+}
+
+.legend-values {
+    display: flex;
+    justify-content: space-between;
+    font-size: 0.7rem;
+    color: var(--text-muted);
+}
+/* --- 5-TAB NAVIGATION SYSTEM --- */
+
+.sidebar-tabs {
+    position: fixed;
+    left: 20px;
+    top: 50%;
+    transform: translateY(-50%);
+    width: 80px;
+    display: flex;
+    flex-direction: column;
+    gap: 15px;
+    padding: 20px 0;
+    z-index: 1000;
+    border-radius: 40px;
+    align-items: center;
+}
+
+.tab-item {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 5px;
+    cursor: pointer;
+    width: 60px;
+    height: 60px;
+    justify-content: center;
+    border-radius: 15px;
+    transition: all 0.3s ease;
+    color: var(--text-secondary);
+}
+
+.tab-item i {
+    font-size: 1.4rem;
+}
+
+.tab-label {
+    font-size: 0.65rem;
+    text-transform: uppercase;
+    font-weight: 600;
+    opacity: 0.7;
+}
+
+.tab-item:hover {
+    color: var(--text-primary);
+    background: rgba(255, 255, 255, 0.05);
+}
+
+.tab-item.active {
+    background: var(--accent-color);
+    color: #000;
+    box-shadow: 0 0 15px rgba(56, 189, 248, 0.4);
+}
+
+.tab-item.active .tab-label {
+    opacity: 1;
+}
+
+/* --- TAB VISIBILITY RULES --- */
+
+/* Default: Hide most things in Earth Mode */
+.panel, .bottom-panel, .insight-card, .sensor-popup {
+    transition: all 0.5s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* Tab 1: Immersive Earth (Initial State) */
+body[data-active-tab="earth"] .panel,
+body[data-active-tab="earth"] .bottom-panel {
+    opacity: 0 !important;
+    pointer-events: none;
+    transform: translateX(-20px);
+}
+
+body[data-active-tab="earth"] .top-nav .logo,
+body[data-active-tab="earth"] .top-nav .nav-controls > *:not(#minimal-toggle) {
+    opacity: 0;
+    pointer-events: none;
+}
+
+body[data-active-tab="earth"] .right-panel {
+    transform: translateX(20px);
+}
+
+/* Tab 2: Insight */
+body[data-active-tab="insight"] .left-panel {
+    opacity: 1;
+    pointer-events: auto;
+    transform: translateX(0);
+}
+body[data-active-tab="insight"] .insight-card.active {
+    right: 20px;
+}
+
+/* Tab 3: Temporal */
+body[data-active-tab="temporal"] .bottom-panel {
+    opacity: 1;
+    pointer-events: auto;
+    transform: translateY(0);
+}
+
+/* Tab 4: Prediction */
+body[data-active-tab="prediction"] .right-panel {
+    opacity: 1;
+    pointer-events: auto;
+    transform: translateX(0);
+}
+
+/* Tab 5: Lab */
+body[data-active-tab="lab"] .left-panel {
+    opacity: 1;
+    pointer-events: auto;
+    transform: translateX(0);
+}
+body[data-active-tab="lab"] #scenario-panel {
+    display: block !important;
+}
+
+/* Utility to ensure dashboard container expands to handle sidebar */
+.dashboard-container {
+    margin-left: 100px; /* Make room for the fixed sidebar */
+}
+
+body.minimal-mode .sidebar-tabs {
+    opacity: 0;
+    pointer-events: none;
 }
