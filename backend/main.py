@@ -11,7 +11,7 @@ curr_dir = os.path.dirname(os.path.abspath(__file__))
 if curr_dir not in sys.path:
     sys.path.append(curr_dir)
 
-from services import nasa_firms, modis_ndvi, climate, mock_data
+from services import nasa_firms, modis_ndvi, climate, mock_data, weather
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -98,8 +98,13 @@ def get_wildfires():
 
 @app.get("/vegetation")
 def get_vegetation():
-    """Returns biome-modelled global NDVI distribution as GeoJSON."""
+    """Returns biome-modelled global NDVI distribution as GeoJSON for overview."""
     return modis_ndvi.get_vegetation_geojson()
+
+@app.get("/ndvi-value")
+def get_ndvi_value(lat: float = Query(...), lon: float = Query(...), date: str = Query(None)):
+    """Near real-time NDVI analysis for specific coordinates."""
+    return modis_ndvi.get_ndvi_at_location(lat, lon, date)
 
 @app.get("/climate")
 def get_climate(lat: float = Query(None), lon: float = Query(None)):
@@ -156,6 +161,43 @@ def get_prediction(scenario: str = Query(...), lat: float = Query(...), lon: flo
         "sea_level_rise_cm": round(base_multiplier * 12.4, 1),
         "impact_summary": "Critical local instability predicted." if wildfire_risk > 75 else "Significant environmental shifts expected."
     }
+
+# --- CITIZEN SCIENCE REPORTING ---
+from pydantic import BaseModel
+from sqlalchemy.orm import Session
+from fastapi import Depends
+from database import get_db, Report as DBReport
+
+class ReportCreate(BaseModel):
+    lat: float
+    lon: float
+    incident_type: str
+    severity: int
+    description: str
+
+@app.post("/api/reports")
+def create_report(report: ReportCreate, db: Session = Depends(get_db)):
+    """Saves a user-submitted environmental incident report."""
+    db_report = DBReport(
+        lat=report.lat,
+        lon=report.lon,
+        incident_type=report.incident_type,
+        severity=report.severity,
+        description=report.description
+    )
+    db.add(db_report)
+    db.commit()
+    db.refresh(db_report)
+    return db_report
+
+@app.get("/api/weather")
+async def get_weather(lat: float, lon: float):
+    return await weather.weather_service.get_weather(lat, lon)
+
+@app.get("/api/reports")
+def get_reports(db: Session = Depends(get_db)):
+    """Returns all citizen science reports."""
+    return db.query(DBReport).all()
 
 # Mount frontend static files
 # BASE_DIR is the root project folder

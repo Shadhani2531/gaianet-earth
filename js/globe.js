@@ -24,6 +24,9 @@ class GlobeManager {
             // Removed requestRenderMode to restore native smooth zooming/panning
         });
 
+        // Disable default browser context menu on the globe
+        document.getElementById('cesiumContainer').addEventListener('contextmenu', (e) => e.preventDefault());
+
         // Dark sky/space background for aesthetic
         this.viewer.scene.skyAtmosphere.hueShift = -0.5;
         this.viewer.scene.skyAtmosphere.saturationShift = 0.5;
@@ -35,17 +38,24 @@ class GlobeManager {
             pollution: null,
             weather: null,
             ndvi: null,
+            ndviImagery: null, // Track imagery layer separately
             wildfires: [],
             sensors: [],
-            shi: []
+            shi: [],
+            reports: []
         };
 
         this.initCamera();
         this.initInteraction();
         this.listenForScenarios();
+        this.loadUserReports(); // Load existing reports on startup
+        
+        // Atmospheric Synchronization Engine (ASE)
+        this.weather = new WeatherManager(this.viewer);
         
         // Auto-rotation state
         this.isAutoRotating = false;
+        this.lastSliderValue = 100; // Baseline for rotation
         this.lastTime = Date.now();
         
         document.addEventListener('minimalModeChanged', (e) => {
@@ -54,6 +64,128 @@ class GlobeManager {
                 this.startAutoRotation();
             }
         });
+
+        // Listen for new reports submitted
+        document.addEventListener('reportSubmitted', (e) => {
+            this.addReportEntity(e.detail);
+        });
+    }
+
+    async searchLocation(query) {
+        try {
+            // Use Cesium Ion Geocoder as primary
+            const geocoder = new Cesium.IonGeocoderService();
+            const results = await geocoder.geocode(query);
+            
+            if (results && results.length > 0) {
+                const destination = results[0].destination;
+                const name = results[0].displayName;
+                
+                this.flyToDestination(destination, name);
+                return true;
+            }
+            return false;
+        } catch (error) {
+            console.error("Geocoding failed:", error);
+            return false;
+        }
+    }
+
+    flyToDestination(destination, name) {
+        this.viewer.camera.flyTo({
+            destination: destination,
+            duration: 2.0,
+            complete: () => {
+                // Determine lat/lon from destination for analytics
+                // flyTo destinations can be Cartesian3 or Rectangle
+                let coords;
+                if (destination instanceof Cesium.Cartesian3) {
+                    const carto = Cesium.Cartographic.fromCartesian(destination);
+                    coords = {
+                        lat: Cesium.Math.toDegrees(carto.latitude),
+                        lon: Cesium.Math.toDegrees(carto.longitude)
+                    };
+                } else if (destination instanceof Cesium.Rectangle) {
+                    const center = Cesium.Rectangle.center(destination);
+                    coords = {
+                        lat: Cesium.Math.toDegrees(center.latitude),
+                        lon: Cesium.Math.toDegrees(center.longitude)
+                    };
+                }
+
+                if (coords) {
+                    this.loadLocationAnalytics(coords.lat, coords.lon);
+                    if (window.ui) window.ui.showNeuralScan(`SYNCED: ${name}`);
+                }
+            }
+        });
+    }
+
+    async loadUserReports() {
+        const reports = await api.getReports();
+        if (reports && reports.length) {
+            reports.forEach(report => this.addReportEntity(report));
+        }
+    }
+
+    addReportEntity(data) {
+        const colorMap = {
+            'Fire': Cesium.Color.ORANGERED,
+            'Pollution': Cesium.Color.PURPLE,
+            'Deforestation': Cesium.Color.LIMEGREEN,
+            'Other': Cesium.Color.YELLOW
+        };
+
+        const color = colorMap[data.incident_type] || Cesium.Color.WHITE;
+        
+        const entity = this.viewer.entities.add({
+            position: Cesium.Cartesian3.fromDegrees(data.lon, data.lat),
+            point: {
+                pixelSize: 10,
+                color: color,
+                outlineColor: Cesium.Color.BLACK,
+                outlineWidth: 2,
+                heightReference: Cesium.HeightReference.CLAMP_TO_GROUND,
+                disableDepthTestDistance: Number.POSITIVE_INFINITY
+            },
+            label: {
+                text: data.incident_type,
+                font: '12px Outfit',
+                fillColor: Cesium.Color.WHITE,
+                outlineColor: Cesium.Color.BLACK,
+                outlineWidth: 2,
+                style: Cesium.LabelStyle.FILL_AND_OUTLINE,
+                verticalOrigin: Cesium.VerticalOrigin.BOTTOM,
+                pixelOffset: new Cesium.Cartesian2(0, -15),
+                distanceDisplayCondition: new Cesium.DistanceDisplayCondition(0, 1000000)
+            }
+        });
+
+        // Simple pulse animation for reports
+        let startTime = Date.now();
+        const pulse = () => {
+            if (!entity) return;
+            const elapsed = (Date.now() - startTime) / 1000;
+            const scale = 1.0 + Math.sin(elapsed * 4) * 0.3;
+            entity.point.pixelSize = 10 * scale;
+            requestAnimationFrame(pulse);
+        };
+        pulse();
+
+        entity._customData = {
+            type: 'user_report',
+            name: `User Report: ${data.incident_type}`,
+            lat: data.lat,
+            lon: data.lon,
+            details: {
+                "Type": data.incident_type,
+                "Severity": `${data.severity}/5`,
+                "Description": data.description,
+                "Date": new Date(data.timestamp).toLocaleString()
+            }
+        };
+
+        this.layers.reports.push(entity);
     }
 
     startAutoRotation() {
@@ -114,6 +246,21 @@ class GlobeManager {
             }
         }, Cesium.ScreenSpaceEventType.LEFT_CLICK);
 
+        // --- RIGHT CLICK FOR CITIZEN SCIENCE ---
+        handler.setInputAction((movement) => {
+            const cartesian = this.viewer.camera.pickEllipsoid(movement.position, this.viewer.scene.globe.ellipsoid);
+            if (cartesian) {
+                const cartographic = Cesium.Cartographic.fromCartesian(cartesian);
+                const lat = Cesium.Math.toDegrees(cartographic.latitude);
+                const lon = Cesium.Math.toDegrees(cartographic.longitude);
+                
+                // Dispatch event to UI to open modal
+                document.dispatchEvent(new CustomEvent('openReportModal', { 
+                    detail: { lat, lon } 
+                }));
+            }
+        }, Cesium.ScreenSpaceEventType.RIGHT_CLICK);
+
         // Update layers based on UI toggles
         document.getElementById('layer-wildfires').addEventListener('change', (e) => this.toggleWildfires(e.target.checked));
         document.getElementById('layer-temp').addEventListener('change', (e) => this.toggleEnvironmentalLayer(e.target.checked, 'temperature'));
@@ -172,47 +319,121 @@ class GlobeManager {
         this.viewer.scene.requestRender();
     }
 
-    updateTime(value) {
-        // Unify with UI display
-        if (ui) ui.updateDateDisplay(value);
+    updateTime(value, type = 'primary') {
+        // Expanded Range: 1984 through 2030 (approx 550 months)
+        const startYear = 1984;
+        const totalMonths = (2030 - 1984) * 12;
+        const currentMonthTotal = Math.floor((value / 100) * totalMonths);
+        const year = startYear + Math.floor(currentMonthTotal / 12);
+        const month = (currentMonthTotal % 12) + 1;
+        const monthStr = month.toString().padStart(2, '0');
+        const dateStr = `${year}-${monthStr}-01`;
         
-        // Screen 3: Temporal Reaction
-        // We simulate a trend: future = more intense anomalies
-        const yearOffset = (value / 12); // Years from 2024
-        const intensityFactor = 1.0 + (yearOffset * 0.05); // 5% increase in visual intensity per year
-        
-        if (this.layers.temperature) {
-            this.layers.temperature.entities.values.forEach(e => {
-                if (e.point) {
-                    const baseVal = e._customData.value;
-                    const futureVal = baseVal * intensityFactor;
-                    
-                    // Dynamic coloring based on "Future" value
-                    let color = Cesium.Color.BLUE;
-                    if (futureVal > 1.0) color = Cesium.Color.RED;
-                    else if (futureVal > 0) color = Cesium.Color.YELLOW;
-                    
-                    e.point.color = color.withAlpha(0.7);
-                    e.point.pixelSize = 6 * (1 + (futureVal * 0.2));
-                }
-            });
+        if (type === 'primary') {
+            this.currentDate = dateStr;
+            this.rotateToTime(value);
+            if (window.ui) window.ui.updateDateDisplay(value, 'primary');
+        } else {
+            this.historicalDate = dateStr;
+            if (window.ui) window.ui.updateDateDisplay(value, 'historical');
         }
 
-        if (this.layers.ndvi) {
-            this.layers.ndvi.entities.values.forEach(e => {
-                if (e.point) {
-                    const baseVal = e._customData.value;
-                    // Simulate browning/drying in future
-                    const futureVal = baseVal * (1.1 - (yearOffset * 0.02)); 
-                    
-                    let color = Cesium.Color.fromCssColorString('#14532d'); // Dense
-                    if (futureVal < 0.2) color = Cesium.Color.fromCssColorString('#a16207'); // Desert
-                    else if (futureVal < 0.5) color = Cesium.Color.fromCssColorString('#84cc16'); // Grass
-                    
-                    e.point.color = color.withAlpha(0.7);
-                }
-            });
+        this.refreshImageryLayers();
+        console.log(`4D Engine [${type.toUpperCase()}]: ${dateStr}`);
+    }
+
+    rotateToTime(sliderValue) {
+        // Calculate the difference from last value
+        const delta = sliderValue - this.lastSliderValue;
+        if (Math.abs(delta) < 0.1) return; // Ignore micro-jitters
+        
+        const totalYears = (2030 - 1984);
+        const deltaYears = (delta / 100) * totalYears;
+        
+        // 1 Year = 360 degrees (per user requirement)
+        const deltaRotation = Cesium.Math.toRadians(360 * deltaYears);
+        
+        // Rotate around Z axis (Earth's axis)
+        this.viewer.camera.rotate(Cesium.Cartesian3.UNIT_Z, deltaRotation);
+        
+        this.lastSliderValue = sliderValue;
+    }
+
+    async refreshImageryLayers() {
+        if (this.layers.ndviImagery) {
+            this.refreshNdviImagery(this.currentDate, 
+                this.isSplitMode ? Cesium.SplitDirection.RIGHT : Cesium.SplitDirection.NONE, 
+                'ndviImagery'
+            );
         }
+        
+        if (this.isSplitMode) {
+            this.refreshNdviImagery(this.historicalDate || "1984-01-01", 
+                Cesium.SplitDirection.LEFT, 
+                'historicalNdvi'
+            );
+        }
+    }
+
+    async refreshNdviImagery(date, splitDir, layerKey) {
+        if (this.layers[layerKey]) {
+            this.viewer.imageryLayers.remove(this.layers[layerKey]);
+        }
+        
+        const provider = new Cesium.WebMapTileServiceImageryProvider({
+            url: 'https://gibs.earthdata.nasa.gov/wmts/epsg4326/best/wmts.cgi',
+            layer: 'MODIS_Terra_NDVI_Monthly',
+            style: 'default',
+            format: 'image/png',
+            tileMatrixSetID: '250m',
+            maximumLevel: 8,
+            tilingScheme: new Cesium.GeographicTilingScheme(),
+            parameters: { time: date }
+        });
+        
+        this.layers[layerKey] = this.viewer.imageryLayers.addImageryProvider(provider);
+        this.layers[layerKey].alpha = 0.8;
+        this.layers[layerKey].splitDirection = splitDir;
+    }
+
+    toggleSplitScreen(enabled) {
+        this.isSplitMode = enabled;
+        const divider = document.getElementById('split-divider');
+        
+        if (enabled) {
+            divider.classList.remove('hidden');
+            this.initSplitDividerInteraction();
+            this.refreshImageryLayers();
+        } else {
+            divider.classList.add('hidden');
+            if (this.layers.historicalNdvi) {
+                this.viewer.imageryLayers.remove(this.layers.historicalNdvi);
+                this.layers.historicalNdvi = null;
+            }
+            if (this.layers.ndviImagery) this.layers.ndviImagery.splitDirection = Cesium.SplitDirection.NONE;
+        }
+    }
+
+    initSplitDividerInteraction() {
+        const divider = document.getElementById('split-divider');
+        let dragging = false;
+
+        const move = (e) => {
+            if (!dragging) return;
+            const x = e.clientX;
+            const width = window.innerWidth;
+            const splitPosition = x / width;
+            
+            divider.style.left = `${x}px`;
+            this.viewer.scene.imagerySplitPosition = splitPosition;
+        };
+
+        const onDown = () => { dragging = true; };
+        const onUp = () => { dragging = false; };
+
+        divider.addEventListener('mousedown', onDown);
+        document.addEventListener('mouseup', onUp);
+        document.addEventListener('mousemove', move);
     }
 
     renderLegends() {
@@ -276,12 +497,12 @@ class GlobeManager {
 
     async loadLocationAnalytics(lat, lon) {
         try {
-            // Screen 2: Cinematic Camera Tilt
+            // Screen 2: Top-Down Camera View (No Tilt as per User Request)
             this.viewer.camera.flyTo({
-                destination: Cesium.Cartesian3.fromDegrees(lon, lat - 5, 2000000), // Slightly offset lat for "tilted" look
+                destination: Cesium.Cartesian3.fromDegrees(lon, lat, 2000000), 
                 orientation: {
                     heading: Cesium.Math.toRadians(0),
-                    pitch: Cesium.Math.toRadians(-35),
+                    pitch: Cesium.Math.toRadians(-90),
                     roll: 0
                 },
                 duration: 2.0
@@ -290,8 +511,9 @@ class GlobeManager {
             const climateData = await api.getClimate(lat, lon);
             const envData = await api.getEnvironment(lat, lon);
             const shiData = await api.getShi(lat, lon);
+            const ndviData = await api.getNdviValue(lat, lon, this.currentDate);
             
-            if (ui) ui.updateAnalyticsPanel(climateData, envData, shiData);
+            if (ui) ui.updateAnalyticsPanel(climateData, envData, shiData, ndviData);
         } catch (e) {
             console.error("Failed to load analytics:", e);
         }
@@ -379,6 +601,10 @@ class GlobeManager {
     }
 
     async toggleEnvironmentalLayer(visible, type) {
+        if (type === 'ndvi') {
+            return this.toggleNdviSatellite(visible);
+        }
+
         if (!visible) {
             if (this.layers[type]) {
                 this.viewer.dataSources.remove(this.layers[type]);
@@ -387,7 +613,7 @@ class GlobeManager {
             return;
         }
 
-        const data = (type === 'ndvi') ? await api.getVegetation() : await api.getClimate();
+        const data = await api.getClimate();
         if(!data) return;
 
         try {
@@ -397,19 +623,11 @@ class GlobeManager {
                 const entity = entities[i];
                 const val = entity.properties.value ? entity.properties.value.getValue() : 0;
                 
+                // Blue -> Yellow -> Red (Anomaly)
                 let color;
-                if (type === 'ndvi') {
-                    // Brown -> Dark Green
-                    if (val < 0) color = Cesium.Color.fromCssColorString('#3b82f6').withAlpha(0.2); // Water
-                    else if (val < 0.2) color = Cesium.Color.fromCssColorString('#a16207'); // Desert
-                    else if (val < 0.5) color = Cesium.Color.fromCssColorString('#84cc16'); // Grass
-                    else color = Cesium.Color.fromCssColorString('#14532d'); // Dense
-                } else {
-                    // Blue -> Yellow -> Red (Anomaly)
-                    if (val < 0) color = Cesium.Color.BLUE;
-                    else if (val < 1.0) color = Cesium.Color.YELLOW;
-                    else color = Cesium.Color.RED;
-                }
+                if (val < 0) color = Cesium.Color.BLUE;
+                else if (val < 1.0) color = Cesium.Color.YELLOW;
+                else color = Cesium.Color.RED;
 
                 entity.point = {
                     pixelSize: 6,
@@ -418,7 +636,7 @@ class GlobeManager {
                 };
                 
                 entity._customData = {
-                    type: type === 'ndvi' ? 'vegetation' : 'climate',
+                    type: 'climate',
                     value: val,
                     lat: Cesium.Math.toDegrees(Cesium.Cartographic.fromCartesian(entity.position.getValue()).latitude),
                     lon: Cesium.Math.toDegrees(Cesium.Cartographic.fromCartesian(entity.position.getValue()).longitude)
@@ -429,8 +647,21 @@ class GlobeManager {
             this.layers[type] = dataSource;
             this.viewer.scene.requestRender();
         } catch (e) {
-            console.error(`${type} load error:`, e);
+            console.error(`Error loading layer ${type}:`, e);
         }
+    }
+
+    async toggleNdviSatellite(visible) {
+        if (!visible) {
+            if (this.layers.ndviImagery) {
+                this.viewer.imageryLayers.remove(this.layers.ndviImagery);
+                this.layers.ndviImagery = null;
+            }
+            return;
+        }
+
+        if (!this.currentDate) this.currentDate = '2024-01-01';
+        this.refreshNdviImagery();
     }
 
     listenForScenarios() {
@@ -625,5 +856,21 @@ class GlobeManager {
         
         this.viewer.entities.resumeEvents();
         this.viewer.scene.requestRender();
+    }
+
+    resetView() {
+        this.viewer.camera.flyTo({
+            destination: Cesium.Cartesian3.fromDegrees(
+                CONFIG.DEFAULT_COORDINATES.lon,
+                CONFIG.DEFAULT_COORDINATES.lat,
+                CONFIG.DEFAULT_COORDINATES.height
+            ),
+            orientation: {
+                heading: 0,
+                pitch: Cesium.Math.toRadians(-90),
+                roll: 0
+            },
+            duration: 2.0
+        });
     }
 }

@@ -24,42 +24,53 @@
 <body>
 
     <!-- Header / Nav -->
-    <header class="top-nav glass-panel">
+    <header class="top-nav glass-panel shimmer-edge">
         <div class="logo">
             <i class="fa-solid fa-earth-americas"></i>
             <h1>GaiaNet Earth</h1>
-            <span class="subtitle">Digital Twin Dashboard</span>
+            <span class="subtitle">Digital Twin</span>
         </div>
         <div class="nav-controls">
-            <button id="scenario-btn" class="btn primary-btn"><i class="fa-solid fa-flask"></i> What-If Scenarios</button>
             <div class="status-indicator">
-                <span class="dot live"></span> Live Data Feed
+                <span class="dot live"></span> LIVE
             </div>
+            <button id="reset-globe-btn" class="icon-btn" title="Reset Globe View"><i class="fa-solid fa-rotate-right"></i></button>
             <button id="minimal-toggle" class="icon-btn" title="Toggle Immersive Mode"><i class="fa-solid fa-expand"></i></button>
         </div>
     </header>
 
-    <!-- Sidebar Navigation Tabs -->
+    <!-- Floating Top Controller -->
+    <div class="floating-controller glass-panel shimmer-edge">
+        <i class="fa-solid fa-magnifying-glass"></i>
+        <input type="text" class="search-input" placeholder="Search Location or Simulation Scenario...">
+        <button id="scenario-btn" class="btn primary-btn"><i class="fa-solid fa-flask"></i> LAB</button>
+    </div>
+
+    <!-- Neural Scan Overlay -->
+    <div id="neural-overlay" class="neural-overlay hidden">
+        <div class="scan-title">NEURAL SCAN: <span id="scan-location">GLOBAL</span></div>
+        <div class="scan-status flicker"><i class="fa-solid fa-sync"></i> Syncing Ground Truth...</div>
+    </div>
+
+    <!-- Spatial Tab Dock -->
     <nav class="sidebar-tabs glass-panel">
         <div class="tab-item active" data-tab="earth" title="Immersive Earth">
             <i class="fa-solid fa-earth-americas"></i>
-            <span class="tab-label">Earth</span>
         </div>
-        <div class="tab-item" data-tab="insight" title="Location Insight">
-            <i class="fa-solid fa-location-dot"></i>
-            <span class="tab-label">Insight</span>
+        <div class="tab-item" data-tab="insight" title="Climate Insight">
+            <i class="fa-solid fa-satellite"></i>
         </div>
-        <div class="tab-item" data-tab="temporal" title="Temporal Engine">
+        <div class="tab-item" data-tab="temporal" title="Historical Timeline">
             <i class="fa-solid fa-clock-rotate-left"></i>
-            <span class="tab-label">Timeline</span>
         </div>
-        <div class="tab-item" data-tab="prediction" title="Prediction Center">
+        <div class="tab-item" data-tab="prediction" title="Forecast Lab">
             <i class="fa-solid fa-brain"></i>
-            <span class="tab-label">Forecast</span>
         </div>
-        <div class="tab-item" data-tab="lab" title="Digital Lab">
-            <i class="fa-solid fa-flask"></i>
-            <span class="tab-label">Simulator</span>
+        <div class="tab-item" data-tab="simulator" title="Simulator Controls">
+            <i class="fa-solid fa-sliders"></i>
+        </div>
+        <div class="tab-item" data-tab="reports" title="Community Reports">
+            <i class="fa-solid fa-bullhorn"></i>
         </div>
     </nav>
 
@@ -151,6 +162,11 @@
 
         <!-- Screen 2: Immersive Insight Card -->
         <div id="insight-card" class="insight-card glass-panel">
+            <div id="insight-scan-overlay" class="scanning-overlay hidden">
+                <div class="scan-line"></div>
+                <div class="scan-status flicker small">NEURAL SYNC IN PROGRESS...</div>
+            </div>
+            
             <button id="close-insight" class="close-btn"><i class="fa-solid fa-times"></i></button>
             <div id="insight-header">
                 <h3 id="insight-title"><i class="fa-solid fa-satellite"></i> Insight</h3>
@@ -173,16 +189,36 @@
                     <span class="value" id="node-risk">--%</span>
                 </div>
             </div>
-            <div class="chart-container" style="height: 180px;">
+            <div class="chart-container" style="height: 140px;">
                 <canvas id="insightChart"></canvas>
+            </div>
+            
+            <!-- NDVI Dynamic Legend -->
+            <div id="ndvi-legend-box" class="ndvi-legend hidden">
+                <div class="ndvi-legend-labels">
+                    <span>Sparse / Tundra</span>
+                    <span>Rainforest</span>
+                </div>
+                <div class="ndvi-legend-bar"></div>
+                <div class="text-center x-small text-secondary mt-1">VEGETATION DENSITY SCALE (NDVI)</div>
             </div>
         </div>
 
         <!-- Right Panel: Analytics -->
         <aside class="panel right-panel glass-panel">
-            <h2><i class="fa-solid fa-chart-line"></i> Analytics</h2>
+            <h2><i class="fa-solid fa-chart-line"></i> Intelligence Platform</h2>
+            
+            <!-- SHI Gauge (Phase 3 Spatial Design) -->
+            <div class="shi-gauge-container">
+                <div class="shi-gauge shi-gauge-healthy">
+                    <span class="shi-value" id="shi-value">84</span>
+                    <span class="shi-label">Health Index</span>
+                </div>
+                <p class="text-center text-secondary small">Current Ecological Stability: Optimized</p>
+            </div>
+
             <div class="location-summary" id="location-summary">
-                <p>Select a location or sensor on the globe to view analytics.</p>
+                <p>Select a location for deep-scan analytics.</p>
             </div>
             
             <div class="chart-container">
@@ -194,37 +230,118 @@
             
             <div class="stats-grid">
                 <div class="stat-card">
-                    <span class="stat-label">Air Quality</span>
+                    <span class="stat-label">Air Quality (AQI)</span>
                     <span class="stat-value" id="stat-aqi">--</span>
                 </div>
                 <div class="stat-card">
                     <span class="stat-label">CO₂ ppm</span>
                     <span class="stat-value" id="stat-co2">--</span>
                 </div>
+                <div class="stat-card">
+                    <span class="stat-label">Vegetation (NDVI)</span>
+                    <span class="stat-value" id="stat-ndvi">--</span>
+                </div>
+                <div class="stat-card">
+                    <span class="stat-label">Fire Risk Index</span>
+                    <span class="stat-value" id="stat-risk">--</span>
+                </div>
+            </div>
+        </aside>
+
+        <!-- Screen 6: Community Reports Feed -->
+        <aside id="reports-panel" class="panel right-panel glass-panel hidden">
+            <h2><i class="fa-solid fa-bullhorn"></i> Global Ground-Truth</h2>
+            <div id="reports-feed" class="reports-feed">
+                <!-- Dynamic reports injected here -->
+                <p class="text-secondary small">Syncing live community incidents...</p>
             </div>
         </aside>
     </main>
 
-    <!-- Bottom: Timeline -->
-    <footer class="bottom-panel glass-panel">
+    <!-- 4D Temporal Engine Overlay -->
+    <div id="split-divider" class="split-divider hidden"></div>
+
+    <footer class="bottom-panel glass-panel shimmer-edge">
         <div class="timeline-controls">
             <button class="icon-btn" id="play-btn"><i class="fa-solid fa-play"></i></button>
-            <div class="timeline-slider-container">
-                <span id="current-date-display">March 2026</span>
-                <input type="range" id="timeline-slider" min="0" max="100" value="100" class="timeline-slider">
-            </div>
-            <select id="speed-select" class="dropdown small-dropdown">
+            <select id="speed-select" class="dropdown small-btn ml-2" style="width: 100px; color: var(--text-secondary); background: rgba(0,0,0,0.3); border: 1px solid var(--panel-border); border-radius: 8px;">
                 <option value="1">1x Speed</option>
                 <option value="2">2x Speed</option>
                 <option value="5">5x Speed</option>
             </select>
+            
+            <div class="timeline-slider-group">
+                <div class="slider-node">
+                    <span class="slider-label">PRIMARY [2026]</span>
+                    <input type="range" id="timeline-slider" min="0" max="100" value="100" class="timeline-slider">
+                </div>
+                
+                <div id="comparison-slider-node" class="slider-node hidden">
+                    <span class="slider-label">HISTORICAL [1984]</span>
+                    <input type="range" id="comparison-slider" min="0" max="100" value="0" class="timeline-slider">
+                </div>
+            </div>
+
+            <div class="timeline-actions">
+                <button id="split-screen-btn" class="btn secondary-btn small-btn"><i class="fa-solid fa-columns"></i> SPLIT</button>
+                <span id="current-date-display" class="date-badge">MARCH 2026</span>
+            </div>
         </div>
     </footer>
+
+    <!-- Citizen Science Reporting Modal (Liquid Glass Refinement) -->
+    <div id="report-modal" class="modal-overlay hidden">
+        <div class="modal-content glass-panel shimmer-edge">
+            <div class="modal-header">
+                <h2><i class="fa-solid fa-bullhorn"></i> Ground-Truth Report</h2>
+                <button id="close-report-modal" class="icon-btn"><i class="fa-solid fa-xmark"></i></button>
+            </div>
+            <form id="report-form">
+                <div class="form-group">
+                    <label>Incident Type</label>
+                    <div class="segmented-picker">
+                        <input type="radio" name="incident-type" value="Fire" id="type-fire" checked>
+                        <label for="type-fire">🔥 Fire</label>
+                        
+                        <input type="radio" name="incident-type" value="Pollution" id="type-pollution">
+                        <label for="type-pollution">🌫️ Smog</label>
+                        
+                        <input type="radio" name="incident-type" value="Deforestation" id="type-logging">
+                        <label for="type-logging">🌲 Logging</label>
+                    </div>
+                </div>
+                
+                <div class="form-group">
+                    <label>Severity Level: <span id="severity-val">3</span></label>
+                    <input type="range" id="report-severity" min="1" max="5" step="1" value="3" class="timeline-slider">
+                    <div class="severity-labels">
+                        <span>Low</span>
+                        <span>Critical</span>
+                    </div>
+                </div>
+
+                <div class="form-group">
+                    <label>Description</label>
+                    <textarea id="report-description" rows="3" placeholder="Provide real-time details..." required></textarea>
+                </div>
+
+                <div class="report-location-info">
+                    <i class="fa-solid fa-location-crosshairs"></i> <span id="report-coords">0, 0</span>
+                </div>
+
+                <button type="submit" class="btn primary-btn w-full">
+                    <i class="fa-solid fa-paper-plane"></i> TRANSMIT REPORT
+                </button>
+            </form>
+        </div>
+    </div>
 
     <!-- Scripts -->
     <script src="js/config.js"></script>
     <script src="js/api.js"></script>
     <script src="js/ui.js"></script>
+    <script src="js/simulation.js"></script>
+    <script src="js/weather.js"></script>
     <script src="js/globe.js"></script>
     <script src="js/main.js"></script>
 </body>

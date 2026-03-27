@@ -1,27 +1,28 @@
-# 🚀 GaiaNet Earth (v2.1.0) — Unified Real-World Intelligence
-*Merging "Helpful Features" from Shadhani & Friend*
+# 🚀 GaiaNet Earth (v3.0.0) — High-Fidelity Simulation Environment
+*Moving from Environmental Dashboard to Dynamic Digital Twin*
 
 ## Current System Overview
-GaiaNet Earth is now a **Unified Environmental Intelligence Platform**. It has transitioned from purely simulated models to a live-data-driven digital twin, integrating real-time air quality, wildfire, and climate data via global API networks.
+GaiaNet Earth is now a **High-Fidelity Dynamic Simulation Environment**. It features a "Liquid Glass" spatial HUD, a bi-directional reporting layer for citizen science, and a causal simulation engine that forecasts environmental impacts across a 4D temporal scale (1984-2030).
 
 ---
 
-## 🌎 5-Tab Navigation Flow
-The dashboard remains organized into 5 focused screens, now powered by real-time data feeds:
-1.  **Immersive Earth**: Immersive CesiumJS globe with live satellite imagery.
-2.  **Location Insight**: Deep analytics with **Real-Time AQI & Temperature** (via WAQI).
-3.  **Temporal Engine**: Historical trends and future playback logic.
-4.  **Prediction Center**: Data-driven risk forecasting.
-5.  **Digital Lab**: Scenario simulators with global parameter control.
+## 🌎 5-Tab Operational Command Center
+1.  **Immersive Earth**: Immersive CesiumJS globe with live satellite imagery and **Geospatial Search-to-Fly**.
+2.  **Location Insight**: Centered analytics with real-time AQI, Temp, and **Neural Scan** synchronization.
+3.  **Temporal Engine (4D)**: Dual-timeline playback with **Split-Screen** historical comparison and physical globe rotation.
+4.  **Forecast Center**: Predictive risk modeling with a live **Sustainability Health Index (SHI)** gauge.
+5.  **Simulator/Lab**: Causal parameter control (Temp/Rain offsets) with interactive "What-if" result charts.
 
 ---
 
-## 🔥 New Real-World Features (Merged!)
-- **Global Air Quality (OpenAQ)**: Live visualization of 10,000+ stations worldwide.
-- **Dynamic WAQI Integration**: Coordinates-based real-time environmental intelligence (AQI, Temp, CO2).
-- **India Live SHI Tracking**: Live Sustainability Health Index for 10 major Indian cities.
-- **Docker Ready**: Full `docker-compose.yml` support for isolated database and app execution.
-- **Unified Server Architecture**: Single FastAPI instance serving both the API and the 5-Tab Frontend.
+## 🔥 Phase 3 Structural Upgrades
+- **Citizen Science Layer**: Right-click to report incidents. Pulsing global entities with live feed.
+- **Atmospheric Synchronization Engine (ASE)**: Mirrors real-world weather states (Rain/Snow) using post-process shaders.
+- **"Neural Scan" Sync**: Cinematic 1.2s data synchronization animation on the Insight card.
+- **Dynamic NDVI Legend**: Fixed color scale (Sparse to Rainforest) linked to vegetation toggle.
+- **4D Temporal Engine**: Physical globe rotation (360°/yr) synchronized with the timeline slider.
+- **Causal Cascade Engine**: Drought logic: Rainfall drops $\rightarrow$ NDVI crashes $\rightarrow$ Fire Risk spikes.
+- **Search & Fly-To**: Integrated global geocoding for seamless navigation.
 
 ---
 
@@ -29,11 +30,11 @@ The dashboard remains organized into 5 focused screens, now powered by real-time
 
 | Data Layer | Type | Source | Update Freq | Status |
 | :--- | :--- | :--- | :--- | :--- |
-| **Wildfires** | Real-Time | NASA FIRMS | ~10 mins | ✅ Fully Implemented |
-| **Satellite Imagery** | Real-Time | NASA GIBS | Live | ✅ Fully Implemented |
-| **Air Quality (AQI)** | Real-Time | **OpenAQ / WAQI** | Live | ✅ REAL DATA |
-| **Vegetation (NDVI)** | Simulated | Model-based | Instant | ⚠️ Semi-Real |
-| **Climate Trends** | Real-Time | **WAQI (Live)** | Live | ✅ REAL DATA |
+| **Wildfires** | Real-Time | NASA FIRMS | ~10 mins | ✅ Live Integration |
+| **Satellite Imagery** | Real-Time | NASA GIBS | Live | ✅ 1984-2030 Support |
+| **Air Quality (AQI)** | Real-Time | OpenAQ / WAQI | Live | ✅ Data-Driven |
+| **Ground Truth** | Community | Local API (SQLite) | Live | ✅ Bi-Directional |
+| **Weather (ASE)** | Real-Time | OpenWeatherMap | Live | ✅ Post-Processed |
 
 ---
 
@@ -41,11 +42,11 @@ The dashboard remains organized into 5 focused screens, now powered by real-time
 
 | Phase | Status | Progress |
 | :--- | :--- | :--- |
-| **Phase 1 (Visualization)** | ✅ Completed | NASA-level immersion with 5-Tab system. |
+| **Phase 1 (Visualization)** | ✅ Completed | NASA-level immersion with Liquid Glass HUD. |
 | **Phase 2 (Data Layers)** | ✅ Completed | Fully integrated Live Wildfire & Air Quality APIs. |
-| **Phase 3 (Time System)** | ✅ Implemented | Full Temporal Engine tab functionality. |
-| **Phase 4 (Prediction)** | ⚠️ Partially Implemented | Forecast tab with data-driven risk metrics. |
-| **Phase 5 (Infrastructure)**| ✅ Implemented| Unified Server & Docker Support. |
+| **Phase 3 (Simulation)** | ✅ Completed | 4D Temporal, Causal Simulation, & Citizen Science. |
+| **Phase 4 (Forecast)** | 🚀 In Progress | Expanding AI-driven anomaly detection models. |
+| **Phase 5 (Infrastructure)**| ✅ Completed | Unified Server & Docker Support. |
 
 ---
-*Last Updated: 2026-03-23*
+*Last Updated: 2026-03-27*

@@ -31,6 +31,10 @@ class ApiService {
         return this.get('/vegetation');
     }
 
+    async getNdviValue(lat, lon, date = null) {
+        return this.get('/ndvi-value', { lat, lon, date });
+    }
+
     async getWildfires() {
         return this.get('/wildfires');
     }
@@ -49,6 +53,24 @@ class ApiService {
 
     async getShiIndiaLive() {
         return this.get('/shi-india-live');
+    }
+
+    async submitReport(reportData) {
+        try {
+            const response = await fetch(`${CONFIG.API_BASE_URL}/api/reports`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(reportData)
+            });
+            return await response.json();
+        } catch (error) {
+            console.error("Report submission failed:", error);
+            return null;
+        }
+    }
+
+    async getReports() {
+        return this.get('/api/reports');
     }
 }
 
