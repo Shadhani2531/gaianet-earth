@@ -1,0 +1,377 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>GaiaNet - System Architecture Diagram</title>
+    <!-- FontAwesome for icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Montserrat:wght@400;600;700;800&family=Open+Sans:wght@400;600&display=swap');
+
+        body {
+            font-family: 'Open Sans', sans-serif;
+            background-color: #ffffff;
+            color: #333;
+            margin: 0;
+            padding: 40px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+
+        .header {
+            text-align: center;
+            margin-bottom: 30px;
+            width: 100%;
+            max-width: 1200px;
+        }
+
+        .header h1 {
+            font-family: 'Montserrat', sans-serif;
+            font-size: 38px;
+            font-weight: 800;
+            letter-spacing: 2px;
+            margin: 0 0 10px 0;
+            padding: 10px;
+            background: linear-gradient(90deg, #d6eaf8, #ebdef0, #d6eaf8);
+            border: 1px solid #ccc;
+        }
+
+        .header p {
+            font-size: 16px;
+            font-weight: 700;
+            max-width: 1000px;
+            margin: 0 auto;
+            line-height: 1.4;
+        }
+
+        .diagram-wrapper {
+            display: flex;
+            flex-direction: column;
+            width: 100%;
+            max-width: 1400px;
+            position: relative;
+        }
+
+        .top-descriptions {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 20px;
+            padding-left: 15%;
+            padding-right: 5%;
+        }
+
+        .desc-box {
+            width: 250px;
+            font-size: 13px;
+            font-weight: 600;
+            text-align: center;
+            padding: 10px;
+            border-radius: 8px;
+            background: #fff;
+            position: relative;
+            z-index: 10;
+        }
+
+        .swimlanes {
+            display: flex;
+            justify-content: space-between;
+            align-items: stretch;
+            gap: 15px;
+            position: relative;
+            z-index: 5;
+        }
+
+        .column {
+            flex: 1;
+            border-radius: 12px;
+            padding: 15px;
+            display: flex;
+            flex-direction: column;
+            gap: 15px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.05);
+            border-top: 5px solid;
+            background: #fdfdfd;
+        }
+
+        .column h3 {
+            font-family: 'Montserrat', sans-serif;
+            font-size: 14px;
+            text-align: center;
+            margin: 0 0 10px 0;
+            padding-bottom: 10px;
+            border-bottom: 1px solid rgba(0,0,0,0.1);
+        }
+
+        .box {
+            background: #fff;
+            border: 1px solid rgba(0,0,0,0.1);
+            border-radius: 8px;
+            padding: 12px;
+            font-size: 12px;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+
+        .box-title {
+            font-weight: 700;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 13px;
+        }
+
+        .box ul {
+            margin: 0;
+            padding-left: 20px;
+            color: #555;
+        }
+
+        .box ul li {
+            margin-bottom: 4px;
+        }
+
+        /* Connecting Arrows Concept using after/before would be complex, we rely on layout proximity */
+        .arrow-right {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: #aaa;
+            font-size: 24px;
+        }
+
+        /* Colors */
+        .col-1 { border-color: #3498DB; background-color: #EBF5FB; }
+        .col-2 { border-color: #1ABC9C; background-color: #E8F8F5; }
+        .col-3 { border-color: #2ECC71; background-color: #EAFAF1; }
+        .col-4 { border-color: #F39C12; background-color: #FEF5E7; }
+        .col-5 { border-color: #E74C3C; background-color: #FDEDEC; }
+
+        .col-1 h3 { color: #2874A6; }
+        .col-2 h3 { color: #117864; }
+        .col-3 h3 { color: #1D8348; }
+        .col-4 h3 { color: #B9770E; }
+        .col-5 h3 { color: #B03A2E; }
+
+        .bottom-repo {
+            margin-top: 30px;
+            background: #e8f6f3;
+            border: 2px dashed #1ABC9C;
+            border-radius: 12px;
+            padding: 15px;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            gap: 50px;
+            width: 60%;
+            align-self: center;
+        }
+
+        .repo-box {
+            display: flex;
+            align-items: center;
+            gap: 15px;
+            font-weight: 600;
+            font-size: 14px;
+        }
+
+        .repo-box i {
+            font-size: 30px;
+            color: #1ABC9C;
+        }
+
+        .footer {
+            margin-top: 20px;
+            font-size: 20px;
+            font-weight: 700;
+            text-align: center;
+            font-family: 'Montserrat', sans-serif;
+            max-width: 1000px;
+            line-height: 1.4;
+        }
+        
+        .earth-icon {
+            text-align: center;
+            font-size: 50px;
+            color: #3498DB;
+            margin: 10px 0;
+        }
+
+        /* Connecting Lines Simulated */
+        .link-path {
+            position: absolute;
+            border: 2px solid;
+            z-index: 1;
+        }
+        
+    </style>
+</head>
+<body>
+
+    <div class="header">
+        <h1>METHODOLOGY</h1>
+        <p>The proposed system follows a step-by-step architecture starting from multi-source data collection to AI-driven visualization and scenario simulation in GaiaNet Earth.</p>
+    </div>
+
+    <div class="diagram-wrapper">
+        
+        <!-- Top Descriptions -->
+        <div class="top-descriptions">
+            <div class="desc-box" style="color: #117864;">
+                This stage cleans, harmonizes, and formats raw environmental data for structured use. It converts heterogeneous datasets into a unified digital format.
+            </div>
+            <div class="desc-box" style="color: #1D8348;">
+                This layer acts as the system core, managing data routing, integration, and mathematical causal relationships. It calculates predictions and SHI indexing.
+            </div>
+            <div class="desc-box" style="color: #B9770E;">
+                This layer transforms processed data into interactive visual representations. It supports multi-layered climate visualization and 4D traversal.
+            </div>
+        </div>
+
+        <div class="swimlanes">
+            <!-- Col 1 -->
+            <div class="column col-1">
+                <h3>Data Sources & Collection</h3>
+                <div class="box">
+                    <div class="box-title"><i class="fa-solid fa-satellite"></i> Satellite Observation</div>
+                    <ul>
+                        <li>NASA FIRMS (MODIS)</li>
+                        <li>NASA GIBS Imagery</li>
+                    </ul>
+                </div>
+                <div class="box">
+                    <div class="box-title"><i class="fa-solid fa-smog"></i> Environmental Sensors</div>
+                    <ul>
+                        <li>WAQI (Air Quality)</li>
+                        <li>OpenAQ Nodes</li>
+                    </ul>
+                </div>
+                <div class="box">
+                    <div class="box-title"><i class="fa-solid fa-cloud-sun-rain"></i> Climate Databases</div>
+                    <ul>
+                        <li>Open-Meteo Archive</li>
+                        <li>OpenWeatherMap Live</li>
+                    </ul>
+                </div>
+            </div>
+
+            <!-- Arrow -->
+            <div class="arrow-right"><i class="fa-solid fa-caret-right"></i></div>
+
+            <!-- Col 2 -->
+            <div class="column col-2">
+                <h3>Data Processing & Ingestion</h3>
+                <div class="box">
+                    <div class="box-title"><i class="fa-solid fa-filter"></i> Data Ingestion</div>
+                    <ul>
+                        <li>Continuous API Polling</li>
+                        <li>Rate-Limit Handling</li>
+                        <li>Mock Fallback Gen.</li>
+                    </ul>
+                </div>
+                <div class="box">
+                    <div class="box-title"><i class="fa-solid fa-layer-group"></i> Unit Harmonization</div>
+                    <ul>
+                        <li>GeoJSON Topology Mapping</li>
+                        <li>Timestamp Normalization</li>
+                        <li>Spatial Downsampling</li>
+                    </ul>
+                </div>
+            </div>
+
+            <!-- Arrow -->
+            <div class="arrow-right"><i class="fa-solid fa-caret-right"></i></div>
+
+            <!-- Col 3 -->
+            <div class="column col-3">
+                <h3>Backend API & Processing</h3>
+                <div class="box">
+                    <div class="box-title"><i class="fa-solid fa-server"></i> Python FastAPI Gateway</div>
+                    <ul>
+                        <li>Asynchronous Data Routing</li>
+                        <li>Citizen Report Handlers</li>
+                    </ul>
+                </div>
+                <div class="box" style="border: 2px solid #2ECC71;">
+                    <div class="box-title"><i class="fa-solid fa-brain"></i> Intelligence Engine</div>
+                    <ul>
+                        <li>Causal Cascade Simulation</li>
+                        <li>Drought & Risk Forecasting</li>
+                        <li>SHI Formula Calculation</li>
+                        <li>NDVI Biome Modeling</li>
+                    </ul>
+                </div>
+            </div>
+
+            <!-- Arrow -->
+            <div class="arrow-right"><i class="fa-solid fa-caret-right"></i></div>
+
+            <!-- Col 4 -->
+            <div class="column col-4">
+                <h3>Visualization Layer</h3>
+                <div class="box">
+                    <div class="box-title"><i class="fa-solid fa-vr-cardboard"></i> Immersive HUD</div>
+                    <ul>
+                        <li>Liquid Glass DOM Overlays</li>
+                        <li>Temporal 4D Dual-Slider</li>
+                        <li>Neural Scan Animations</li>
+                    </ul>
+                </div>
+                <div class="box">
+                    <div class="box-title"><i class="fa-solid fa-cloud"></i> WebGL Post-Processing</div>
+                    <ul>
+                        <li>Atmospheric Sync Engine</li>
+                        <li>Dynamic Weather Shaders</li>
+                    </ul>
+                </div>
+            </div>
+
+            <!-- Arrow -->
+            <div class="arrow-right"><i class="fa-solid fa-caret-right"></i></div>
+
+            <!-- Col 5 -->
+            <div class="column col-5">
+                <h3>3D Earth Digital Twin</h3>
+                <div class="earth-icon"><i class="fa-solid fa-earth-americas"></i></div>
+                <div class="box" style="text-align: center;">
+                    <strong>CesiumJS 3D WebGL Globe</strong>
+                </div>
+                <div class="box">
+                    <ul>
+                        <li>Real-Time Spatial Entites</li>
+                        <li>Layered NDVI Indicators</li>
+                        <li>Global Fire Hotspot Clusters</li>
+                        <li>"Search-to-Fly" Geocoding</li>
+                    </ul>
+                </div>
+            </div>
+        </div>
+
+        <!-- Central Data Repository -->
+        <div class="bottom-repo">
+            <div class="repo-box">
+                <i class="fa-solid fa-database"></i>
+                <div>
+                    <div><strong>Central Data Repository</strong></div>
+                    <div style="font-weight: 400; font-size: 13px; color: #555;">SQLite (Citizen Reports)</div>
+                </div>
+            </div>
+            <div class="repo-box">
+                <i class="fa-solid fa-memory"></i>
+                <div>
+                    <div><strong>Dynamic In-Memory Cache</strong></div>
+                    <div style="font-weight: 400; font-size: 13px; color: #555;">TTL: 600s – 86400s</div>
+                </div>
+            </div>
+        </div>
+        
+    </div>
+
+    <div class="footer">
+        Together, these decoupled layers form a scalable, intelligent Digital Twin Earth framework for real-time environmental monitoring, 4D situational awareness, and predictive anomaly analysis.
+    </div>
+
+</body>
+</html>

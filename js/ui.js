@@ -196,27 +196,36 @@ class UIManager {
         // Timeline playback
         const playBtn = document.getElementById('play-btn');
         let isPlaying = false;
-        let playInterval;
+        let speedIntervalCheck;
 
         playBtn.addEventListener('click', () => {
             isPlaying = !isPlaying;
             playBtn.innerHTML = isPlaying ? '<i class="fa-solid fa-pause"></i>' : '<i class="fa-solid fa-play"></i>';
             
             if (isPlaying) {
-                const slider = document.getElementById('timeline-slider');
                 const speedSelect = document.getElementById('speed-select');
-                const speed = speedSelect ? parseInt(speedSelect.value) : 1;
+                const getSpeed = () => speedSelect ? parseInt(speedSelect.value) : 1;
                 
-                playInterval = setInterval(() => {
-                    let val = parseInt(slider.value);
-                    if (val >= 100) slider.value = 0;
-                    else slider.value = val + 1;
-                    
-                    this.updateDateDisplay(slider.value, 'primary');
-                    slider.dispatchEvent(new Event('input'));
-                }, 1000 / speed);
+                // Trigger Earth Auto-Rotation to represent time visually
+                if (window.globeManager) {
+                    window.globeManager.isAutoRotating = true;
+                    window.globeManager.rotationSpeedMultiplier = getSpeed();
+                    window.globeManager.startAutoRotation();
+                }
+
+                // Continuously update speed if user changes dropdown while playing
+                speedIntervalCheck = setInterval(() => {
+                    if (window.globeManager) {
+                        window.globeManager.rotationSpeedMultiplier = getSpeed();
+                    }
+                }, 500);
+
             } else {
-                clearInterval(playInterval);
+                clearInterval(speedIntervalCheck);
+                // Stop rotation
+                if (window.globeManager) {
+                    window.globeManager.isAutoRotating = false;
+                }
             }
         });
 

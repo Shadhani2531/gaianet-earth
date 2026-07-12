@@ -189,18 +189,20 @@ class GlobeManager {
     }
 
     startAutoRotation() {
-        const rotate = () => {
-            if (!this.isAutoRotating) return;
-            
-            const now = Date.now();
-            const delta = (now - this.lastTime) / 1000;
-            this.lastTime = now;
-            
-            this.viewer.camera.rotate(Cesium.Cartesian3.UNIT_Z, 0.05 * delta);
-            requestAnimationFrame(rotate);
-        };
-        this.lastTime = Date.now();
-        requestAnimationFrame(rotate);
+        console.log("Auto Rotation module activated");
+        if (!this.autoRotateSubscription) {
+            this.autoRotateSubscription = this.viewer.scene.preRender.addEventListener(() => {
+                if (this.isAutoRotating) {
+                    const speed = this.rotationSpeedMultiplier || 1;
+                    
+                    // Rotate the camera around the global Z-axis (North Pole)
+                    this.viewer.scene.camera.rotate(Cesium.Cartesian3.UNIT_Z, 0.005 * speed);
+                    
+                    // Force the scene to render if it's sluggish 
+                    this.viewer.scene.requestRender();
+                }
+            });
+        }
     }
 
     initCamera() {

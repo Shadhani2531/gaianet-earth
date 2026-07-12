@@ -1,0 +1,385 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Dataset Sources Diagram - GaiaNet Earth</title>
+    <!-- FontAwesome for standard vector icons without relying on external images -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&family=Playfair+Display:wght@600;700&display=swap');
+
+        body {
+            font-family: 'Roboto', sans-serif;
+            background-color: #ffffff;
+            margin: 0;
+            padding: 40px;
+            display: flex;
+            justify-content: center;
+        }
+
+        .diagram-container {
+            width: 1100px;
+            border: 2px solid #333;
+            /* Using a very subtle off-white back fill */
+            background-color: #FAFAFA;
+            padding: 30px 40px;
+            box-sizing: border-box;
+            position: relative;
+        }
+
+        .main-title {
+            text-align: center;
+            font-family: 'Playfair Display', serif;
+            font-size: 26px;
+            font-weight: 700;
+            color: #1A2530;
+            margin-bottom: 40px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+
+        /* Top Cloud Providers Section */
+        .top-providers {
+            display: flex;
+            justify-content: space-around;
+            margin-bottom: 30px;
+        }
+
+        .provider-cloud {
+            padding: 10px 20px;
+            border-radius: 40px;
+            /* Clean academic pill shape instead of literal clouds to look more scientific */
+            border: 1px solid #B0BEC5;
+            background: #ffffff;
+            font-weight: 500;
+            color: #455A64;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+            position: relative;
+        }
+
+        .provider-cloud::after {
+            content: '';
+            position: absolute;
+            bottom: -32px;
+            left: 50%;
+            transform: translateX(-50%);
+            width: 2px;
+            height: 30px;
+            background-color: #90A4AE;
+        }
+
+        /* 3-Column Grid for main data */
+        .grid-layout {
+            display: grid;
+            grid-template-columns: 320px 1fr 320px;
+            gap: 30px;
+            align-items: center;
+        }
+
+        /* Side Boxes */
+        .data-card {
+            background: #ffffff;
+            border-radius: 8px;
+            border: 1px solid #CFD8DC;
+            padding: 15px;
+            margin-bottom: 25px;
+            box-shadow: 0 2px 6px rgba(0,0,0,0.03);
+            position: relative;
+        }
+
+        /* Connector arrows pointing to center */
+        .data-card.left::after {
+            content: '→';
+            position: absolute;
+            right: -25px;
+            top: 50%;
+            transform: translateY(-50%);
+            font-size: 24px;
+            color: #90A4AE;
+            font-weight: bold;
+        }
+
+        .data-card.right::after {
+            content: '←';
+            position: absolute;
+            left: -25px;
+            top: 50%;
+            transform: translateY(-50%);
+            font-size: 24px;
+            color: #90A4AE;
+            font-weight: bold;
+        }
+
+        .card-header {
+            font-size: 14px;
+            font-weight: 700;
+            text-align: center;
+            padding: 6px;
+            margin-bottom: 12px;
+            border-radius: 4px;
+            text-transform: uppercase;
+        }
+
+        /* Specific colors for academic clarity: Pastel / Muted */
+        .color-space { background: #E3F2FD; color: #1565C0; border: 1px solid #BBDEFB; }
+        .color-climate { background: #E8F5E9; color: #2E7D32; border: 1px solid #C8E6C9; }
+        .color-air { background: #FFF3E0; color: #E65100; border: 1px solid #FFE0B2; }
+        .color-civic { background: #F3E5F5; color: #6A1B9A; border: 1px solid #E1BEE7; }
+
+        .data-item {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            margin-top: 10px;
+            padding-top: 10px;
+            border-top: 1px dashed #ECEFF1;
+        }
+        
+        .data-item i {
+            font-size: 20px;
+            color: #607D8B;
+            width: 25px;
+            text-align: center;
+        }
+
+        .data-text {
+            font-size: 12px;
+            color: #455A64;
+            line-height: 1.3;
+        }
+        .data-text strong {
+            display: block;
+            color: #263238;
+            font-size: 13px;
+        }
+
+        /* Center Column Layout */
+        .center-col {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 20px;
+        }
+
+        .backend-services {
+            background-color: #2C3E50;
+            color: white;
+            padding: 15px 20px;
+            border-radius: 6px;
+            width: 100%;
+            text-align: center;
+            box-sizing: border-box;
+            position: relative;
+        }
+
+        .backend-services h3 { margin: 0 0 10px 0; font-size: 16px; letter-spacing: 1px; }
+        .backend-services ul { margin: 0; padding: 0; list-style: none; font-size: 13px; color: #BDC3C7; }
+        .backend-services ul li { margin-bottom: 4px; }
+
+        .down-arrow {
+            font-size: 20px;
+            color: #2C3E50;
+        }
+
+        .digital-twin-core {
+            /* Simulating the glowing earth central box */
+            background: linear-gradient(180deg, #1A2530 0%, #154360 100%);
+            color: white;
+            border-radius: 12px;
+            padding: 25px;
+            width: 100%;
+            box-sizing: border-box;
+            text-align: center;
+            box-shadow: 0 10px 20px rgba(0,0,0,0.2);
+            position: relative;
+            border: 2px solid #2980B9;
+        }
+
+        .digital-twin-core h2 {
+            margin: 0 0 15px 0;
+            font-family: 'Playfair Display', serif;
+            font-size: 20px;
+            letter-spacing: 2px;
+        }
+
+        .core-globe {
+            font-size: 60px;
+            color: #5DADE2;
+            margin-bottom: 15px;
+            filter: drop-shadow(0px 0px 10px rgba(93,173,226,0.6));
+        }
+
+        .core-badges {
+            display: flex;
+            justify-content: center;
+            gap: 10px;
+            margin-bottom: 20px;
+        }
+
+        .badge {
+            background: rgba(255,255,255,0.1);
+            border: 1px solid rgba(255,255,255,0.3);
+            border-radius: 20px;
+            padding: 4px 10px;
+            font-size: 11px;
+            font-weight: 500;
+        }
+
+        .badge-red { border-color: #E74C3C; color: #FADBD8; }
+        .badge-green { border-color: #2ECC71; color: #D5F5E3; }
+        .badge-blue { border-color: #3498DB; color: #D6EAF8; }
+
+        .analysis-footer {
+            background-color: #5D6D7E;
+            color: #F2F3F4;
+            padding: 12px;
+            border-radius: 6px;
+            width: 100%;
+            box-sizing: border-box;
+            text-align: center;
+            font-size: 13px;
+            font-weight: 500;
+            letter-spacing: 0.5px;
+        }
+
+    </style>
+</head>
+<body>
+
+    <div class="diagram-container">
+        
+        <div class="main-title">Environmental Dataset Sources for GaiaNet 4D Digital Twin</div>
+
+        <!-- Top Overview -->
+        <div class="top-providers">
+            <div class="provider-cloud"><i class="fa-solid fa-satellite"></i> Observation Satellites</div>
+            <div class="provider-cloud"><i class="fa-solid fa-tower-observation"></i> Meteorological Networks</div>
+            <div class="provider-cloud"><i class="fa-solid fa-smog"></i> Local Air Quality Grids</div>
+            <div class="provider-cloud"><i class="fa-solid fa-users"></i> Ground-Truth Reporting</div>
+        </div>
+
+        <div class="grid-layout">
+            
+            <!-- LEFT COLUMN -->
+            <div class="col-left">
+                <!-- Box 1 -->
+                <div class="data-card left">
+                    <div class="card-header color-space">Space-Borne Earth Observation</div>
+                    <div class="data-item">
+                        <i class="fa-solid fa-fire"></i>
+                        <div class="data-text">
+                            <strong>NASA FIRMS (MODIS)</strong>
+                            Real-time thermal anomaly routing & active wildfire coordinate mapping.
+                        </div>
+                    </div>
+                    <div class="data-item">
+                        <i class="fa-solid fa-leaf"></i>
+                        <div class="data-text">
+                            <strong>NASA GIBS Imagery</strong>
+                            Dynamic biome estimation and NDVI (Normalized Difference Vegetation Index) scaling.
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Box 2 -->
+                <div class="data-card left">
+                    <div class="card-header color-climate">Global Climate Databases</div>
+                    <div class="data-item">
+                        <i class="fa-solid fa-chart-line"></i>
+                        <div class="data-text">
+                            <strong>Open-Meteo Archive</strong>
+                            Historical environmental aggregation, precipitation thresholds, and 6-month anomaly detection.
+                        </div>
+                    </div>
+                    <div class="data-item">
+                        <i class="fa-solid fa-temperature-full"></i>
+                        <div class="data-text">
+                            <strong>OpenWeatherMap Live</strong>
+                            Live synoptic atmospheric conditions mapped directly to WebGL post-process shaders.
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- CENTER COLUMN -->
+            <div class="center-col">
+                <!-- Backend Services -->
+                <div class="backend-services">
+                    <h3>Backend API Services</h3>
+                    <ul>
+                        <li><i class="fa-solid fa-check"></i> Python Asynchronous Ingestion</li>
+                        <li><i class="fa-solid fa-check"></i> Standardized GeoJSON Creation</li>
+                        <li><i class="fa-solid fa-check"></i> Dynamic Rate-Limit Throttling</li>
+                    </ul>
+                </div>
+                
+                <i class="fa-solid fa-arrow-down down-arrow"></i>
+
+                <!-- The Earth Core -->
+                <div class="digital-twin-core">
+                    <h2>GAIANET 4D DIGITAL TWIN</h2>
+                    <div class="core-globe">
+                        <i class="fa-solid fa-earth-americas"></i>
+                    </div>
+                    <div class="core-badges">
+                        <div class="badge badge-red">Wildfire Risk</div>
+                        <div class="badge badge-blue">Climate Anomaly</div>
+                        <div class="badge badge-green">Health Index (SHI)</div>
+                    </div>
+                    <!-- Analysis Footer attached to the core -->
+                    <div class="analysis-footer">
+                        Causal Cascade Engine & Future AI Risk Simulation
+                    </div>
+                </div>
+            </div>
+
+            <!-- RIGHT COLUMN -->
+            <div class="col-right">
+                <!-- Box 3 -->
+                <div class="data-card right">
+                    <div class="card-header color-air">Real-Time Sensor Networks</div>
+                    <div class="data-item">
+                        <i class="fa-solid fa-wind"></i>
+                        <div class="data-text">
+                            <strong>World Air Quality Index (WAQI)</strong>
+                            Aggregated global micro-particle (PM2.5/PM10) indexes and localized atmospheric telemetry.
+                        </div>
+                    </div>
+                    <div class="data-item">
+                        <i class="fa-solid fa-satellite-dish"></i>
+                        <div class="data-text">
+                            <strong>OpenAQ Node Integration</strong>
+                            Decentralized environmental sensor mesh networks providing ground-level air quality polling.
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Box 4 -->
+                <div class="data-card right">
+                    <div class="card-header color-civic">Community Civic Science</div>
+                    <div class="data-item">
+                        <i class="fa-solid fa-map-location-dot"></i>
+                        <div class="data-text">
+                            <strong>Local Incident Reporting</strong>
+                            User-submitted geographical waypoints for ground-truth disaster verification.
+                        </div>
+                    </div>
+                    <div class="data-item">
+                        <i class="fa-solid fa-database"></i>
+                        <div class="data-text">
+                            <strong>SQLite Persistence Tier</strong>
+                            Offline-capable regional data retention and localized community environmental logs.
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+        </div>
+    </div>
+
+</body>
+</html>

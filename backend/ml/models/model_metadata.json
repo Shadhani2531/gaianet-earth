@@ -1,0 +1,47 @@
+{
+    "model_name": "XGBoost",
+    "features": [
+        "temperature",
+        "humidity",
+        "PM2.5",
+        "PM10",
+        "NO2",
+        "SO2",
+        "CO"
+    ],
+    "metrics": {
+        "MAE": 10.1071,
+        "RMSE": 38.2898,
+        "R2": 0.6973
+    },
+    "feature_importance_ranking": [
+        {
+            "Feature": "PM2.5",
+            "Importance": 0.4097890555858612
+        },
+        {
+            "Feature": "PM10",
+            "Importance": 0.32101917266845703
+        },
+        {
+            "Feature": "SO2",
+            "Importance": 0.10693176835775375
+        },
+        {
+            "Feature": "temperature",
+            "Importance": 0.07478687912225723
+        },
+        {
+            "Feature": "NO2",
+            "Importance": 0.04066529870033264
+        },
+        {
+            "Feature": "humidity",
+            "Importance": 0.027699530124664307
+        },
+        {
+            "Feature": "CO",
+            "Importance": 0.019108343869447708
+        }
+    ]
+}

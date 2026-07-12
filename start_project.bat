@@ -23,7 +23,12 @@ if not exist venv (
 )
 call venv\Scripts\activate
 echo Installing dependencies...
-pip install -r requirements.txt >nul
+pip install -r requirements.txt
+if %errorlevel% neq 0 (
+    echo [ERROR] Failed to install dependencies. Please check the error messages above.
+    pause
+    exit /b
+)
 start "GaiaNet Unified Server" cmd /k "venv\Scripts\activate && python main.py"
 cd ..
 

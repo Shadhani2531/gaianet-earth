@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Appendix II: Detailed Mathematical Derivations</title>
+    <!-- MathJax for rendering the math formulas beautifully -->
+    <script src="https://polyfill.io/v3/polyfill.min.js?features=es6"></script>
+    <script id="MathJax-script" async src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
+    <style>
+        /* Academic Paper Styling */
+        body {
+            font-family: 'Times New Roman', Times, serif;
+            font-size: 11pt;
+            line-height: 1.5;
+            color: #000;
+            background: #fff;
+            max-width: 800px;
+            margin: 40px auto;
+            padding: 20px;
+            text-align: justify;
+        }
+        h1 {
+            font-size: 14pt;
+            text-align: center;
+            text-transform: uppercase;
+            margin-bottom: 24pt;
+        }
+        h3 {
+            font-size: 12pt;
+            margin-top: 18pt;
+            margin-bottom: 8pt;
+        }
+        p {
+            margin-bottom: 12pt;
+        }
+        .formula {
+            display: block;
+            text-align: center;
+            margin: 16pt 0;
+            font-size: 11pt;
+        }
+        
+        /* Specific rules to optimize for "Print to PDF" */
+        @media print {
+            body {
+                margin: 0;
+                padding: 0;
+                max-width: none;
+            }
+            @page {
+                size: A4 portrait;
+                margin: 25mm; /* 1 inch margins all around */
+            }
+        }
+    </style>
+</head>
+<body>
+
+    <h1>6.2 APPENDIX II: DETAILED MATHEMATICAL DERIVATIONS</h1>
+
+    <p>To simulate a deterministic environment that avoids unbounded extrapolation, the GaiaNet Earth Digital Twin leverages a series of bounded mathematical derivations. This appendix expands upon the primary formulas governing the Causal Cascade Engine and the Sustainability Health Index (SHI).</p>
+
+    <h3>1. Sustainability Health Index (SHI) Derivation</h3>
+    <p>The SHI serves as a normalizing heuristic to map localized Air Quality Indexes (\(A_q\)) into a standardized \([0, 100]\) grading scale. To prevent negative scores under extreme pollution events, the function is sharply bounded utilizing a min-max clamping function.</p>
+
+    <p>Let \(\mathbb{S}\) represent the domain of all possible health scores. The index is defined as:</p>
+    <div class="formula">
+        $$ SHI = \max\left(0, \min\left(100, 100 - \frac{A_q}{k}\right)\right) $$
+    </div>
+    <p>Where the degradation constant \(k = 3\). This specific constant determines the decay rate of livability; specifically, an environmental zone reaches \(SHI = 0\) (Critical Failure) when \(A_q \geq 300\), aligning with WHO "Hazardous" classifications.</p>
+
+    <h3>2. The Drought Propagation Function (\(P_d\))</h3>
+    <p>The causal engine calculates the probability of severe drought (\(P_d\)) based on the inverse relationship between the 3-month localized rainfall average (\(\bar{R}_{3m}\)) and the current thermal anomaly (\(\Delta T\) or \(A_t\)).</p>
+
+    <p>The absolute baseline drought probability without precipitation is set to 80%. Precipitation reduces this baseline logarithmically, while thermal anomalies increase it linearly:</p>
+    <div class="formula">
+        $$ P_d(A_t, \bar{R}_{3m}) = 80 - \left( \frac{\bar{R}_{3m}}{\alpha} \right) + \beta \cdot A_t $$
+    </div>
+    <p>Substituting the engine's empirical constraints (\(\alpha = 1.5\), \(\beta = 5\)):</p>
+    <div class="formula">
+        $$ P_d = \max\left(10, \min\left(95, 80 - \frac{\bar{R}_{3m}}{1.5} + 5 A_t \right)\right) $$
+    </div>
+    <p><em>Derivation Note:</em> The bounds \([10, 95]\) prevent absolute certainty (100%) or absolute impossibility (0%) in the simulation, preserving stochastic realism.</p>
+
+    <h3>3. Wildfire Risk Multiplier (\(W_r\))</h3>
+    <p>Wildfire risk represents a tertiary cascade effect, mathematically dependent on both the primary temperature anomaly and the secondary drought derivation (\(P_d\)).</p>
+
+    <p>Let \(W_r\) represent the risk heuristic. We derive the risk as a heavy weighting of temperature spikes combined with a smaller fraction of the sustained drought probability (since dry brush acts as fuel):</p>
+    <div class="formula">
+        $$ W_r = \lambda(A_t) + \gamma(P_d) $$
+    </div>
+    <p>Substituting the simulation coefficients (\(\lambda = 25\), \(\gamma = 0.4\)) and clamping bounds:</p>
+    <div class="formula">
+        $$ W_r = \max\left(10, \min\left(98, 25 \cdot A_t + 0.4 \cdot P_d\right)\right) $$
+    </div>
+    <p>This ensures that even without high temperatures, a region experiencing 90% drought probability will still hold a \(W_r \approx 36\%\) baseload risk.</p>
+
+    <h3>4. Sinusoidal Seasonal NDVI Offset (\(\delta\))</h3>
+    <p>To create a mathematically sound digital twin of the Earth's vegetation cycles without relying on bandwidth-heavy raster images, the model generates the Normalized Difference Vegetation Index (NDVI) locally.</p>
+
+    <p>The seasonal phase offset simulates the shifting of biomes based on Earth's axial tilt. Let \(m\) be the numerical month (\(1 \leq m \leq 12\)). For Northern Temperate Latitudes (\(30^\circ < \phi < 70^\circ\)), the peak vegetation occurs in July (\(m=7\)). We model this as a sine wave with amplitude 0.2:</p>
+    <div class="formula">
+        $$ \delta_{N}(\phi, m) = 0.2 \cdot \sin\left((m - \tau) \frac{\pi}{6}\right) $$
+    </div>
+    <p>Where the phase shift \(\tau = 4\). By shifting the sine wave forward by 4 months, the maximum positive amplitude exactly aligns with \(m=7\) (July), and the maximum negative amplitude aligns with \(m=1\) (January).</p>
+
+    <p>For the Southern Hemisphere (\(-70^\circ < \phi < -30^\circ\)), the phase is inverted:</p>
+    <div class="formula">
+        $$ \delta_{S}(\phi, m) = 0.2 \cdot \sin\left((m + 2) \frac{\pi}{6}\right) $$
+    </div>
+    <p>The final global NDVI is therefore a composite of the base biome scalar (\(N_{base}\)), the seasonal offset (\(\delta\)), and uniform spatial noise (\(\epsilon \sim U[-0.05, 0.05]\)):</p>
+    <div class="formula">
+        $$ NDVI_{final} = N_{base} + \delta_{\{\phi\}} + \epsilon $$
+    </div>
+
+</body>
+</html>

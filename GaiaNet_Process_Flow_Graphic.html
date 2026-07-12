@@ -1,0 +1,227 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>GaiaNet Process Flow Infographic</title>
+    <!-- Adding FontAwesome for icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background-color: #ffffff;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            padding: 50px 20px;
+            margin: 0;
+        }
+
+        h1 {
+            color: #555;
+            font-size: 20px;
+            font-weight: 600;
+            margin-bottom: 50px;
+        }
+
+        .flow-container {
+            display: flex;
+            flex-direction: column;
+            width: 100%;
+            max-width: 800px;
+            position: relative;
+        }
+
+        .step-row {
+            display: flex;
+            align-items: center;
+            margin-bottom: 30px;
+        }
+
+        /* ODD ROWS: Pill on left, text on right */
+        .step-row:nth-child(odd) {
+            flex-direction: row;
+        }
+
+        /* EVEN ROWS: Pill on right, text on left */
+        .step-row:nth-child(even) {
+            flex-direction: row-reverse;
+        }
+
+        .pill {
+            width: 420px;
+            height: 60px;
+            display: flex;
+            align-items: center;
+            color: #fff;
+            font-weight: 600;
+            font-size: 16px;
+            box-sizing: border-box;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.05);
+            /* Gradient outline illusion */
+            position: relative;
+            background: white;
+            border-width: 2px;
+            border-style: solid;
+        }
+
+        .pill .icon-box {
+            width: 60px;
+            height: 100%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 22px;
+        }
+
+        .pill .title {
+            flex-grow: 1;
+            text-align: center;
+            padding-right: 20px;
+        }
+
+        /* ODD PILLS */
+        .step-row:nth-child(odd) .pill {
+            border-radius: 40px 0 0 40px;
+        }
+        .step-row:nth-child(odd) .icon-box {
+            border-radius: 40px 0 0 40px;
+        }
+
+        /* EVEN PILLS */
+        .step-row:nth-child(even) .pill {
+            border-radius: 0 40px 40px 0;
+            flex-direction: row-reverse;
+        }
+        .step-row:nth-child(even) .icon-box {
+            border-radius: 0 40px 40px 0;
+        }
+        .step-row:nth-child(even) .title {
+            padding-right: 0;
+            padding-left: 20px;
+        }
+
+        .desc {
+            width: 320px;
+            font-size: 12px;
+            color: #666;
+            line-height: 1.4;
+        }
+
+        .step-row:nth-child(odd) .desc {
+            margin-left: 25px;
+            padding-left: 15px;
+            border-left: 1px solid #ddd;
+        }
+
+        .step-row:nth-child(even) .desc {
+            margin-right: 25px;
+            padding-right: 15px;
+            border-right: 1px solid #ddd;
+            text-align: right;
+        }
+
+        /* Specific Colors matching the reference image style */
+        .step-1 .pill { border-color: #5DADE2; color: #5DADE2; }
+        .step-2 .pill { border-color: #58D68D; color: #58D68D; }
+        .step-3 .pill { border-color: #5DADE2; color: #5DADE2; }
+        .step-4 .pill { border-color: #A2D9CE; color: #45B39D; }
+        .step-5 .pill { border-color: #F4D03F; color: #D4AC0D; }
+        .step-6 .pill { border-color: #F5B041; color: #E67E22; }
+        .step-7 .pill { border-color: #EC7063; color: #E74C3c; }
+        .step-8 .pill { border-color: #F5B7B1; color: #C0392B; }
+        .step-9 .pill { border-color: #BB8FCE; color: #9B59B6; }
+
+    </style>
+</head>
+<body>
+
+    <h1>GaiaNet Digital Twin System Process</h1>
+
+    <div class="flow-container">
+        
+        <!-- Step 1 -->
+        <div class="step-row step-1">
+            <div class="pill">
+                <div class="icon-box"><i class="fa-solid fa-satellite-dish"></i></div>
+                <div class="title">Acquisition of Real-time Data</div>
+            </div>
+            <div class="desc">Ingesting heterogeneous API payloads from NASA FIRMS, WAQI, and Open-Meteo.</div>
+        </div>
+
+        <!-- Step 2 -->
+        <div class="step-row step-2">
+            <div class="pill">
+                <div class="icon-box"><i class="fa-solid fa-layer-group"></i></div>
+                <div class="title">Multi-modal Data Fusion</div>
+            </div>
+            <div class="desc">Standardizing spatial topologies and temporally caching the environmental variables.</div>
+        </div>
+
+        <!-- Step 3 -->
+        <div class="step-row step-3">
+            <div class="pill">
+                <div class="icon-box"><i class="fa-solid fa-globe"></i></div>
+                <div class="title">Incorporating 4D Environment</div>
+            </div>
+            <div class="desc">Integrating the synchronized data overlay onto the CesiumJS Liquid Glass HUD.</div>
+        </div>
+
+        <!-- Step 4 -->
+        <div class="step-row step-4">
+            <div class="pill">
+                <div class="icon-box"><i class="fa-solid fa-fire-flame-curved"></i></div>
+                <div class="title">Identifying Climate Anomalies</div>
+            </div>
+            <div class="desc">Using 6-month historical sliding windows to isolate extreme temperature variables.</div>
+        </div>
+
+        <!-- Step 5 -->
+        <div class="step-row step-5">
+            <div class="pill">
+                <div class="icon-box"><i class="fa-solid fa-cloud-sun-rain"></i></div>
+                <div class="title">Causal Cascade Prediction</div>
+            </div>
+            <div class="desc">Calculating associative exponential probabilities (Drought → Wildfire escalations).</div>
+        </div>
+
+        <!-- Step 6 -->
+        <div class="step-row step-6">
+            <div class="pill">
+                <div class="icon-box"><i class="fa-solid fa-chart-column"></i></div>
+                <div class="title">Sustainability Health Indexing</div>
+            </div>
+            <div class="desc">Synthesizing AQI and anomaly thresholds into human-readable Grades (A-D).</div>
+        </div>
+
+        <!-- Step 7 -->
+        <div class="step-row step-7">
+            <div class="pill">
+                <div class="icon-box"><i class="fa-solid fa-bolt"></i></div>
+                <div class="title">Simulating Intervention Scenarios</div>
+            </div>
+            <div class="desc">Running "what-if" models (+1.5C / +2.0C warming) across global geographical sectors.</div>
+        </div>
+
+        <!-- Step 8 -->
+        <div class="step-row step-8">
+            <div class="pill">
+                <div class="icon-box"><i class="fa-solid fa-users-viewfinder"></i></div>
+                <div class="title">Citizen Science Ground Truthing</div>
+            </div>
+            <div class="desc">Overlaying spatial crowdsourced incident reports on authoritative macro-data.</div>
+        </div>
+
+        <!-- Step 9 -->
+        <div class="step-row step-9">
+            <div class="pill">
+                <div class="icon-box"><i class="fa-solid fa-leaf"></i></div>
+                <div class="title">Actionable Climate Interventions</div>
+            </div>
+            <div class="desc">Informing proactive, policy-driven disaster response and resiliency pathways.</div>
+        </div>
+
+    </div>
+
+</body>
+</html>
