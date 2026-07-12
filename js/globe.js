@@ -345,6 +345,9 @@ class GlobeManager {
     }
 
     rotateToTime(sliderValue) {
+        // Do not rotate globe during timelapse playback if the user locked it
+        if (this.isTimelapsePlaying) return;
+
         // Calculate the difference from last value
         const delta = sliderValue - this.lastSliderValue;
         if (Math.abs(delta) < 0.1) return; // Ignore micro-jitters
@@ -369,6 +372,11 @@ class GlobeManager {
             );
         }
         
+        // Also update Satellite layer if active
+        if (this.layers.satellite) {
+            this.refreshSatelliteImagery(this.currentDate);
+        }
+
         if (this.isSplitMode) {
             this.refreshNdviImagery(this.historicalDate || "1984-01-01", 
                 Cesium.SplitDirection.LEFT, 
@@ -378,9 +386,10 @@ class GlobeManager {
     }
 
     async refreshNdviImagery(date, splitDir, layerKey) {
-        if (this.layers[layerKey]) {
-            this.viewer.imageryLayers.remove(this.layers[layerKey]);
-        }
+        if (this._lastNdviDate === date) return;
+        this._lastNdviDate = date;
+
+        const oldLayer = this.layers[layerKey];
         
         const provider = new Cesium.WebMapTileServiceImageryProvider({
             url: 'https://gibs.earthdata.nasa.gov/wmts/epsg4326/best/wmts.cgi',
@@ -396,6 +405,55 @@ class GlobeManager {
         this.layers[layerKey] = this.viewer.imageryLayers.addImageryProvider(provider);
         this.layers[layerKey].alpha = 0.8;
         this.layers[layerKey].splitDirection = splitDir;
+
+        if (oldLayer) {
+            if (this._ndviTimeout) clearTimeout(this._ndviTimeout);
+            if (this._prevNdviLayer && this.viewer.imageryLayers.contains(this._prevNdviLayer)) {
+                this.viewer.imageryLayers.remove(this._prevNdviLayer);
+            }
+            this._prevNdviLayer = oldLayer;
+
+            this._ndviTimeout = setTimeout(() => {
+                if (this.viewer && this.viewer.imageryLayers.contains(oldLayer)) {
+                    this.viewer.imageryLayers.remove(oldLayer);
+                }
+                this._prevNdviLayer = null;
+            }, 800);
+        }
+    }
+
+    async refreshSatelliteImagery(date) {
+        if (this._lastSatDate === date) return;
+        this._lastSatDate = date;
+
+        const oldLayer = this.layers.satellite;
+        
+        const provider = new Cesium.WebMapTileServiceImageryProvider({
+            url: 'https://gibs.earthdata.nasa.gov/wmts/epsg4326/best/wmts.cgi',
+            layer: 'MODIS_Terra_CorrectedReflectance_TrueColor',
+            style: 'default',
+            format: 'image/jpeg',
+            tileMatrixSetID: '250m',
+            maximumLevel: 9,
+            parameters: { time: date }
+        });
+        
+        this.layers.satellite = this.viewer.imageryLayers.addImageryProvider(provider);
+
+        if (oldLayer) {
+            if (this._satTimeout) clearTimeout(this._satTimeout);
+            if (this._prevSatLayer && this.viewer.imageryLayers.contains(this._prevSatLayer)) {
+                this.viewer.imageryLayers.remove(this._prevSatLayer);
+            }
+            this._prevSatLayer = oldLayer;
+
+            this._satTimeout = setTimeout(() => {
+                if (this.viewer && this.viewer.imageryLayers.contains(oldLayer)) {
+                    this.viewer.imageryLayers.remove(oldLayer);
+                }
+                this._prevSatLayer = null;
+            }, 800);
+        }
     }
 
     toggleSplitScreen(enabled) {

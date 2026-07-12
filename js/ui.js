@@ -196,36 +196,47 @@ class UIManager {
         // Timeline playback
         const playBtn = document.getElementById('play-btn');
         let isPlaying = false;
-        let speedIntervalCheck;
+        let timelapseInterval;
 
         playBtn.addEventListener('click', () => {
             isPlaying = !isPlaying;
             playBtn.innerHTML = isPlaying ? '<i class="fa-solid fa-pause"></i>' : '<i class="fa-solid fa-play"></i>';
             
+            const slider = document.getElementById('timeline-slider');
+            
+            if (window.globeManager) {
+                window.globeManager.isTimelapsePlaying = isPlaying;
+            }
+
             if (isPlaying) {
-                const speedSelect = document.getElementById('speed-select');
-                const getSpeed = () => speedSelect ? parseInt(speedSelect.value) : 1;
-                
-                // Trigger Earth Auto-Rotation to represent time visually
-                if (window.globeManager) {
-                    window.globeManager.isAutoRotating = true;
-                    window.globeManager.rotationSpeedMultiplier = getSpeed();
-                    window.globeManager.startAutoRotation();
-                }
-
-                // Continuously update speed if user changes dropdown while playing
-                speedIntervalCheck = setInterval(() => {
-                    if (window.globeManager) {
-                        window.globeManager.rotationSpeedMultiplier = getSpeed();
-                    }
-                }, 500);
-
-            } else {
-                clearInterval(speedIntervalCheck);
-                // Stop rotation
+                // PAUSE auto-rotation during timelapse (so user can focus on environmental changes)
                 if (window.globeManager) {
                     window.globeManager.isAutoRotating = false;
                 }
+
+                const speedSelect = document.getElementById('speed-select');
+                
+                // Start timelapse loop
+                timelapseInterval = setInterval(() => {
+                    const speed = speedSelect ? parseInt(speedSelect.value) : 1;
+                    let currentValue = parseFloat(slider.value);
+                    
+                    // Increment by a step based on speed
+                    currentValue += (0.5 * speed);
+                    
+                    // Loop back to start (1984) if we reach the end (2030)
+                    if (currentValue >= 100) {
+                        currentValue = 0; 
+                    }
+                    
+                    slider.value = currentValue;
+                    
+                    // Trigger the input event so globe.js knows the slider moved
+                    slider.dispatchEvent(new Event('input'));
+                }, 1000); // Trigger every 1 second to allow tiles to load
+            } else {
+                // Stop timelapse
+                clearInterval(timelapseInterval);
             }
         });
 
@@ -374,6 +385,21 @@ class UIManager {
             case 'temporal':
             case 'timeline':
                 if(uiElements.bottom) uiElements.bottom.classList.remove('hidden');
+                
+                // Automatically activate Satellite Timelapse mode and disable Vegetation
+                if (window.globeManager) {
+                    const satToggle = document.getElementById('layer-satellite');
+                    if (satToggle && !satToggle.checked) {
+                        satToggle.checked = true;
+                        window.globeManager.toggleSatelliteView(true);
+                    }
+                    
+                    const ndviToggle = document.getElementById('layer-ndvi');
+                    if (ndviToggle && ndviToggle.checked) {
+                        ndviToggle.checked = false;
+                        window.globeManager.toggleNdvi(false);
+                    }
+                }
                 break;
 
             case 'prediction':
