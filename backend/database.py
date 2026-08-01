@@ -21,10 +21,30 @@ class Report(Base):
     incident_type = Column(String, nullable=False)
     severity = Column(Integer, nullable=False)
     description = Column(String)
+    reporter_name = Column(String, nullable=False, default="Anonymous")
+    reporter_email = Column(String, nullable=True)
+    satellite_confirmed = Column(Integer, default=0)  # 0/1 boolean (SQLite-friendly)
     timestamp = Column(DateTime, default=datetime.datetime.utcnow)
 
 # Create tables
 Base.metadata.create_all(bind=engine)
+
+# --- Lightweight migration for existing databases ---
+# Base.metadata.create_all() only creates missing TABLES, not missing
+# COLUMNS on tables that already exist. Since reports.db may already exist
+# from before reporter_name/reporter_email were added, patch it in place.
+def _migrate_add_missing_columns():
+    with engine.connect() as conn:
+        existing_cols = {row[1] for row in conn.exec_driver_sql("PRAGMA table_info(reports)").fetchall()}
+        if "reporter_name" not in existing_cols:
+            conn.exec_driver_sql("ALTER TABLE reports ADD COLUMN reporter_name VARCHAR DEFAULT 'Anonymous'")
+        if "reporter_email" not in existing_cols:
+            conn.exec_driver_sql("ALTER TABLE reports ADD COLUMN reporter_email VARCHAR")
+        if "satellite_confirmed" not in existing_cols:
+            conn.exec_driver_sql("ALTER TABLE reports ADD COLUMN satellite_confirmed INTEGER DEFAULT 0")
+        conn.commit()
+
+_migrate_add_missing_columns()
 
 def get_db():
     db = SessionLocal()

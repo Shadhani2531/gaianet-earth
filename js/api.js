@@ -43,16 +43,25 @@ class ApiService {
         return this.get('/climate', { lat, lon });
     }
 
-    async getPrediction(scenario, lat, lon) {
-        return this.get('/prediction', { scenario, lat, lon });
+    async getPrediction(lat, lon, { forestLossPct = 0, emissionsIncreasePct = 0, isTropical = true } = {}) {
+        return this.get('/prediction', {
+            lat, lon,
+            forest_loss_pct: forestLossPct,
+            emissions_increase_pct: emissionsIncreasePct,
+            is_tropical: isTropical
+        });
     }
 
     async getStations() {
         return this.get('/stations');
     }
 
-    async getShiIndiaLive() {
-        return this.get('/shi-india-live');
+    async getShiGlobal() {
+        return this.get('/shi-global');
+    }
+
+    async getCountryBoundaries() {
+        return this.get('/country-boundaries');
     }
 
     async submitReport(reportData) {

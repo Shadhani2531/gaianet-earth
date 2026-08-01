@@ -3,16 +3,47 @@ class UIManager {
         this.tempChart = null;
         this.precipChart = null;
         this.insightChart = null;
-        
+        this.selectedLat = null;
+        this.selectedLon = null;
+        this.selectedIsTropical = true;
+
         this.initEventListeners();
         this.initCharts();
         this.initSidebarTabs();
         this.initTimelineEvents();
         this.initSecondaryEvents();
         this.initSearch();
-        
+
+        // Keep the Tab 4 What-If panel's location/biome display in sync
+        // with whatever point is currently selected on the globe, however
+        // it was selected (click, search, or a Tab 3 preset chip).
+        document.addEventListener('locationSelected', (e) => {
+            this.updateSelectedLocationDisplay(e.detail.lat, e.detail.lon);
+        });
+
         // Set default tab
         this.switchTab('earth');
+    }
+
+    updateSelectedLocationDisplay(lat, lon) {
+        this.selectedLat = lat;
+        this.selectedLon = lon;
+        // Tropical zone: roughly the Tropics of Cancer/Capricorn, ±23.5°.
+        this.selectedIsTropical = Math.abs(lat) <= 23.5;
+
+        const locEl = document.getElementById('prediction-location');
+        const locText = document.getElementById('prediction-location-text');
+        if (locText) {
+            locText.innerText = `${lat.toFixed(2)}°, ${lon.toFixed(2)}°`;
+        }
+        if (locEl) locEl.classList.add('selected');
+
+        const biomeText = document.getElementById('prediction-biome-text');
+        if (biomeText) {
+            biomeText.innerText = this.selectedIsTropical
+                ? 'Biome: Tropical'
+                : 'Biome: Non-tropical';
+        }
     }
 
     initSearch() {
@@ -38,11 +69,13 @@ class UIManager {
     }
 
     initEventListeners() {
-        // Toggle Scenario Panel
-        document.getElementById('scenario-btn').addEventListener('click', () => {
-            const panel = document.getElementById('scenario-panel');
-            panel.classList.toggle('hidden');
-        });
+        // "LAB" quick-access button jumps to the What-If Simulator tab
+        const scenarioBtn = document.getElementById('scenario-btn');
+        if (scenarioBtn) {
+            scenarioBtn.addEventListener('click', () => {
+                document.querySelector('[data-tab="prediction"]')?.click();
+            });
+        }
 
         // NDVI Legend Toggle logic
         const ndviCheckbox = document.getElementById('layer-ndvi');
@@ -59,91 +92,27 @@ class UIManager {
             });
         }
 
-        // Run Scenario
-        document.getElementById('run-scenario-btn').addEventListener('click', async () => {
-            const scenario = document.getElementById('scenario-select').value;
-            if (!scenario) {
-                alert("Please select a scenario.");
-                return;
-            }
-            
-            const resultsDiv = document.getElementById('simulation-results');
-            resultsDiv.innerHTML = '<p style="color:var(--text-secondary);"><i class="fa-solid fa-spinner fa-spin"></i> Running simulation models...</p>';
-            
-            // Get center coordinates from globe (mocked for now)
-            const lat = CONFIG.DEFAULT_COORDINATES.lat; 
-            const lon = CONFIG.DEFAULT_COORDINATES.lon;
+        // --- Tab 4: What-If Simulator ---
+        const deforestSlider = document.getElementById('deforestation-slider');
+        const emissionsSlider = document.getElementById('emissions-slider');
+        const deforestVal = document.getElementById('deforestation-val');
+        const emissionsVal = document.getElementById('emissions-val');
 
-            const prediction = await api.getPrediction(scenario, lat, lon);
-            
-            if (prediction) {
-                resultsDiv.innerHTML = `
-                    <div style="background: rgba(0,0,0,0.3); padding: 10px; border-radius: 6px; font-size: 0.9rem;">
-                        <p><strong>Predicted Probabilities:</strong></p>
-                        <div style="display:grid; grid-template-columns: 1fr 1fr; gap:5px; margin: 10px 0;">
-                            <div>🔥 Fire: ${prediction.probabilities.wildfire}%</div>
-                            <div>🌵 Drought: ${prediction.probabilities.drought}%</div>
-                            <div>🌊 Flood: ${prediction.probabilities.flood}%</div>
-                        </div>
-                        <p><strong>Impact:</strong> +${prediction.predicted_temp_change_c}°C</p>
-                        <p><strong>Sea Level:</strong> +${prediction.sea_level_rise_cm}cm</p>
-                    </div>
-                `;
-                
-                document.dispatchEvent(new CustomEvent('scenarioRan', { detail: prediction }));
-            } else {
-                resultsDiv.innerHTML = '<p style="color:var(--danger);">Simulation failed to execute.</p>';
-            }
-        });
+        if (deforestSlider) {
+            deforestSlider.addEventListener('input', (e) => {
+                deforestVal.innerText = `${e.target.value}%`;
+            });
+        }
+        if (emissionsSlider) {
+            emissionsSlider.addEventListener('input', (e) => {
+                emissionsVal.innerText = `${e.target.value}%`;
+            });
+        }
 
-        // --- GLOBAL SIMULATION (SCREEN 5) ---
-        const tempSlider = document.getElementById('global-temp-slider');
-        const rainSlider = document.getElementById('global-rain-slider');
-        
-        tempSlider.addEventListener('input', (e) => {
-            document.getElementById('temp-offset-val').innerText = e.target.value;
-        });
-        
-        rainSlider.addEventListener('input', (e) => {
-            document.getElementById('rain-offset-val').innerText = e.target.value;
-        });
-
-        // Apply Global Simulation
-        document.getElementById('apply-global-btn').addEventListener('click', () => {
-             const temp = parseFloat(tempSlider.value);
-             const rain = parseFloat(rainSlider.value);
-             
-             // 1. Calculate Causal Impact
-             const impact = simulation.forecastImpact(temp, rain);
-             
-             // 2. Update HUD Metrics
-             this.updateSHIGauge(impact.shiScore);
-             document.getElementById('stat-ndvi').innerText = (0.7 + impact.ndviImpact).toFixed(2);
-             document.getElementById('stat-aqi').innerText = Math.round(50 * (1 + impact.aqiImpact));
-             
-             // 3. Cascade Effect: Update Risk Index across tabs
-             const riskVal = `${impact.fireRisk}%`;
-             const riskColor = impact.fireRisk > 70 ? 'var(--danger)' : (impact.fireRisk > 40 ? 'var(--warning-amber)' : 'var(--success)');
-             
-             const riskElem = document.getElementById('node-risk');
-             if (riskElem) {
-                 riskElem.innerText = riskVal;
-                 riskElem.style.color = riskColor;
-             }
-
-             const statRiskElem = document.getElementById('stat-risk');
-             if (statRiskElem) {
-                 statRiskElem.innerText = riskVal;
-                 statRiskElem.style.color = riskColor;
-             }
-
-             // 4. Trigger global reaction on globe
-             document.dispatchEvent(new CustomEvent('globalSimulationApplied', { 
-                 detail: { tempOffset: temp, rainOffset: rain, impact: impact } 
-             }));
-
-             this.showNeuralScan(`Simulation Applied: Risk Index at ${impact.fireRisk}%`);
-        });
+        const runPredictionBtn = document.getElementById('run-prediction-btn');
+        if (runPredictionBtn) {
+            runPredictionBtn.addEventListener('click', () => this.runPrediction());
+        }
 
         this.startReportsSync();
     }
@@ -161,19 +130,92 @@ class UIManager {
         const container = document.getElementById('reports-feed');
         if (!container) return;
 
-        container.innerHTML = reports.reverse().map(r => `
-            <div class="report-card animate-in">
+        container.innerHTML = reports.reverse().map(r => {
+            const ageHours = (Date.now() - new Date(r.timestamp + (r.timestamp.endsWith('Z') ? '' : 'Z')).getTime()) / 3600000;
+            const agingClass = ageHours > 72 ? 'report-aged' : '';
+            return `
+            <div class="report-card animate-in ${agingClass}">
                 <div class="report-header">
                     <span class="report-type">${r.incident_type.toUpperCase()}</span>
                     <span class="report-severity">LVL ${r.severity}</span>
                 </div>
+                ${r.satellite_confirmed ? `
+                    <div class="satellite-badge">
+                        <i class="fa-solid fa-satellite"></i> Confirmed by NASA FIRMS satellite
+                    </div>
+                ` : ''}
                 <div class="report-desc">${r.description}</div>
                 <div class="report-meta">
                     <span><i class="fa-solid fa-location-dot"></i> ${r.lat.toFixed(2)}, ${r.lon.toFixed(2)}</span>
-                    <span>JUST NOW</span>
+                    <span><i class="fa-solid fa-user"></i> ${r.reporter_name || 'Anonymous'}</span>
+                </div>
+                <div class="report-meta">
+                    <span>${this.formatRelativeTime(r.timestamp)}</span>
                 </div>
             </div>
-        `).join('');
+        `;
+        }).join('');
+    }
+
+    formatRelativeTime(timestamp) {
+        const then = new Date(timestamp + (timestamp.endsWith('Z') ? '' : 'Z'));
+        const diffMs = Date.now() - then.getTime();
+        const diffMin = Math.floor(diffMs / 60000);
+        if (diffMin < 1) return 'Just now';
+        if (diffMin < 60) return `${diffMin}m ago`;
+        const diffHr = Math.floor(diffMin / 60);
+        if (diffHr < 24) return `${diffHr}h ago`;
+        const diffDay = Math.floor(diffHr / 24);
+        return `${diffDay}d ago`;
+    }
+
+    async loadGlobalShi() {
+        const statusEl = document.getElementById('global-shi-status');
+        const rankingEl = document.getElementById('global-shi-ranking');
+
+        const result = await api.getShiGlobal();
+
+        if (!result || result.status === 'missing_api_key') {
+            statusEl.classList.remove('hidden');
+            statusEl.classList.add('warning');
+            statusEl.innerHTML = `<i class="fa-solid fa-triangle-exclamation"></i> ${result?.message || 'Could not load global data.'}`;
+            rankingEl.innerHTML = '';
+            return;
+        }
+
+        if (result.status === 'no_data' || !result.countries.length) {
+            statusEl.classList.remove('hidden');
+            statusEl.classList.add('warning');
+            statusEl.innerHTML = `<i class="fa-solid fa-triangle-exclamation"></i> ${result.message || 'No real station data available right now.'}`;
+            rankingEl.innerHTML = '';
+            return;
+        }
+
+        statusEl.classList.add('hidden');
+
+        // Render the country heatmap on the globe
+        if (window.globeManager) {
+            window.globeManager.renderGlobalShiHeatmap(result.countries);
+        }
+
+        // Render the ranking list, with each real component that fed the score
+        rankingEl.innerHTML = result.countries.map((c, i) => {
+            const riskClass = c.shi >= 80 ? 'healthy' : (c.shi >= 50 ? 'moderate' : 'poor');
+            const componentIcons = {
+                air_quality: '<i class="fa-solid fa-wind" title="Air quality (OpenAQ)"></i>',
+                climate_stability: '<i class="fa-solid fa-temperature-half" title="Climate stability (Open-Meteo)"></i>',
+                vegetation: '<i class="fa-solid fa-seedling" title="Vegetation (NASA MODIS)"></i>'
+            };
+            const usedIcons = (c.components_used || []).map(k => componentIcons[k] || '').join(' ');
+            return `
+                <div class="shi-rank-row" data-code="${c.country_code}">
+                    <span class="shi-rank-position">#${i + 1}</span>
+                    <span class="shi-rank-name">${c.country_name}</span>
+                    <span class="shi-rank-components">${usedIcons}</span>
+                    <span class="shi-rank-score ${riskClass}">${c.shi}</span>
+                </div>
+            `;
+        }).join('');
     }
 
     updateSHIGauge(score) {
@@ -185,6 +227,89 @@ class UIManager {
             gauge.classList.toggle('shi-gauge-warning', score < 60);
             gauge.classList.toggle('shi-gauge-critical', score < 40);
         }
+    }
+
+    async runPrediction() {
+        const btn = document.getElementById('run-prediction-btn');
+        const resultsDiv = document.getElementById('prediction-results');
+
+        if (this.selectedLat === null || this.selectedLon === null) {
+            this.showNeuralScan("Click a location on the globe first");
+            return;
+        }
+
+        const lat = this.selectedLat;
+        const lon = this.selectedLon;
+        const isTropical = this.selectedIsTropical;
+
+        const forestLossPct = parseFloat(document.getElementById('deforestation-slider').value);
+        const emissionsIncreasePct = parseFloat(document.getElementById('emissions-slider').value);
+
+        if (forestLossPct === 0 && emissionsIncreasePct === 0) {
+            this.showNeuralScan("Adjust a slider to run a scenario");
+            return;
+        }
+
+        const originalBtnHtml = btn.innerHTML;
+        btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Projecting…';
+        btn.disabled = true;
+
+        const result = await api.getPrediction(lat, lon, { forestLossPct, emissionsIncreasePct, isTropical });
+
+        btn.innerHTML = originalBtnHtml;
+        btn.disabled = false;
+
+        if (!result) {
+            this.showNeuralScan("Prediction request failed");
+            return;
+        }
+
+        resultsDiv.classList.remove('hidden');
+
+        // Before/after SHI comparison
+        const before = result.shi_before;
+        const after = result.shi_after;
+        document.getElementById('shi-before-val').innerText = before.shi;
+        document.getElementById('shi-before-risk').innerText = before.risk;
+        document.getElementById('shi-after-val').innerText = after.shi;
+        document.getElementById('shi-after-risk').innerText = after.risk;
+
+        const afterSide = document.getElementById('shi-after-val').closest('.shi-compare-side');
+        afterSide.classList.remove('worse', 'better');
+        if (after.shi < before.shi) afterSide.classList.add('worse');
+        else if (after.shi > before.shi) afterSide.classList.add('better');
+
+        // Also reflect the projected SHI on the main right-panel gauge,
+        // so the "what if" outcome is visible at a glance app-wide.
+        this.updateSHIGauge(after.shi);
+
+        // Narrative
+        document.getElementById('prediction-narrative').innerText = result.narrative;
+
+        // Per-metric change rows with confidence badges + citations
+        const changesDiv = document.getElementById('prediction-changes');
+        changesDiv.innerHTML = result.changes.map(c => {
+            const deltaClass = c.delta > 0 ? 'positive' : (c.delta < 0 ? 'negative' : '');
+            const deltaSign = c.delta > 0 ? '+' : '';
+            const metricLabel = c.metric.replace(/_/g, ' ');
+            return `
+                <div class="change-row">
+                    <div class="change-row-top">
+                        <span class="change-row-metric">${metricLabel}</span>
+                        <span class="change-row-delta ${deltaClass}">${deltaSign}${c.delta} ${c.unit}</span>
+                    </div>
+                    <div class="change-row-basis">
+                        <span class="confidence-badge ${c.confidence}">${c.confidence}</span>${c.basis}
+                    </div>
+                </div>
+            `;
+        }).join('');
+
+        // Honest data-source note
+        const sourceLabel = result.current_data_source === 'live_waqi'
+            ? 'Live WAQI + Open-Meteo data for this location.'
+            : 'Live data unavailable right now — using a labeled fallback estimate for current conditions.';
+        document.getElementById('prediction-data-note').innerText = sourceLabel;
     }
 
     initSecondaryEvents() {
@@ -300,7 +425,9 @@ class UIManager {
                     lon: lon,
                     incident_type: selectedType,
                     severity: parseInt(severitySlider.value),
-                    description: document.getElementById('report-description').value
+                    description: document.getElementById('report-description').value,
+                    reporter_name: document.getElementById('reporter-name').value.trim() || 'Anonymous',
+                    reporter_email: document.getElementById('reporter-email').value.trim() || null
                 };
 
                 const result = await api.submitReport(reportData);
@@ -349,9 +476,11 @@ class UIManager {
             'left': document.querySelector('.left-panel'),
             'right': document.querySelector('.right-panel'),
             'bottom': document.querySelector('.bottom-panel'),
+            'presets': document.getElementById('timelapse-presets'),
             'insight': document.getElementById('insight-card'),
             'reports': document.getElementById('reports-panel'),
-            'scenario': document.getElementById('scenario-panel'),
+            'globalShi': document.getElementById('global-shi-panel'),
+            'prediction': document.getElementById('prediction-panel'),
             'intelligence': document.querySelector('.layer-group'), 
             'shi_gauge': document.querySelector('.shi-gauge-container'),
             'charts': document.querySelectorAll('.chart-container'),
@@ -367,11 +496,8 @@ class UIManager {
         // 2. Tab-Specific Visibility Logic
         switch(tabName) {
             case 'earth':
-                if(uiElements.search) uiElements.search.classList.remove('hidden');
-                if(uiElements.left) {
-                    uiElements.left.classList.remove('hidden');
-                    if(uiElements.intelligence) uiElements.intelligence.classList.remove('hidden');
-                }
+                // Pure cinematic entry view: no search, no layers, no data
+                // panels. Just the globe, auto-rotating, free to explore.
                 break;
 
             case 'insight':
@@ -385,6 +511,7 @@ class UIManager {
             case 'temporal':
             case 'timeline':
                 if(uiElements.bottom) uiElements.bottom.classList.remove('hidden');
+                if(uiElements.presets) uiElements.presets.classList.remove('hidden');
                 
                 // Automatically activate Satellite Timelapse mode and disable Vegetation
                 if (window.globeManager) {
@@ -405,12 +532,12 @@ class UIManager {
             case 'prediction':
             case 'forecast':
                 if(uiElements.search) uiElements.search.classList.remove('hidden');
-                if(uiElements.right) uiElements.right.classList.remove('hidden');
-                if(uiElements.shi_gauge) uiElements.shi_gauge.classList.remove('hidden');
                 if(uiElements.left) {
                     uiElements.left.classList.remove('hidden');
-                    if(uiElements.intelligence) uiElements.intelligence.classList.remove('hidden');
+                    if(uiElements.prediction) uiElements.prediction.classList.remove('hidden');
                 }
+                if(uiElements.right) uiElements.right.classList.remove('hidden');
+                if(uiElements.shi_gauge) uiElements.shi_gauge.classList.remove('hidden');
                 break;
 
             case 'lab':
@@ -418,7 +545,7 @@ class UIManager {
                 if(uiElements.search) uiElements.search.classList.remove('hidden');
                 if(uiElements.left) {
                     uiElements.left.classList.remove('hidden');
-                    if(uiElements.scenario) uiElements.scenario.classList.remove('hidden');
+                    if(uiElements.intelligence) uiElements.intelligence.classList.remove('hidden');
                 }
                 if(uiElements.right) {
                     uiElements.right.classList.remove('hidden');
@@ -429,8 +556,15 @@ class UIManager {
             case 'reports':
                 if(uiElements.reports) uiElements.reports.classList.remove('hidden');
                 break;
+
+            case 'global-shi':
+                if(uiElements.globalShi) uiElements.globalShi.classList.remove('hidden');
+                this.loadGlobalShi();
+                break;
         }
-        
+
+        document.dispatchEvent(new CustomEvent('tabSwitched', { detail: { tab: tabName } }));
+
         console.log(`Command Center HUD Refactored for: ${tabName}`);
     }
 
@@ -470,6 +604,7 @@ class UIManager {
 
         primarySlider.addEventListener('input', (e) => {
             if (window.globeManager) window.globeManager.updateTime(e.target.value, 'primary');
+            this.updateTimelineNdviReadout();
         });
 
         comparisonSlider.addEventListener('input', (e) => {
@@ -485,6 +620,50 @@ class UIManager {
                 window.globeManager.toggleSplitScreen(splitActive);
             }
         });
+
+        // Curated location presets — guaranteed-good starting points for
+        // the timelapse, since a blank globe + slider gives no cue where
+        // to look for a dramatic real change.
+        document.querySelectorAll('.preset-chip').forEach(chip => {
+            chip.addEventListener('click', () => {
+                const lat = parseFloat(chip.dataset.lat);
+                const lon = parseFloat(chip.dataset.lon);
+                const height = parseFloat(chip.dataset.height) || 1000000;
+                const name = chip.dataset.name;
+
+                document.querySelectorAll('.preset-chip').forEach(c => c.classList.remove('active'));
+                chip.classList.add('active');
+
+                if (window.globeManager) {
+                    window.globeManager._programmaticFlight = true;
+                    window.globeManager.viewer.camera.flyTo({
+                        destination: Cesium.Cartesian3.fromDegrees(lon, lat, height),
+                        duration: 2.0,
+                        complete: () => { window.globeManager._programmaticFlight = false; }
+                    });
+                    window.globeManager.currentLat = lat;
+                    window.globeManager.currentLon = lon;
+                    document.dispatchEvent(new CustomEvent('locationSelected', { detail: { lat, lon } }));
+                }
+                this.showNeuralScan(name);
+            });
+        });
+    }
+
+    // Fetch the real NDVI value for whatever location is currently in
+    // view, at the slider's current date, so the timelapse is backed by
+    // an actual number alongside the imagery — not just a visual.
+    async updateTimelineNdviReadout() {
+        if (!window.globeManager) return;
+        const lat = window.globeManager.currentLat ?? CONFIG.DEFAULT_COORDINATES.lat;
+        const lon = window.globeManager.currentLon ?? CONFIG.DEFAULT_COORDINATES.lon;
+        const date = window.globeManager.currentDate;
+
+        const ndviData = await api.getNdviValue(lat, lon, date);
+        const readout = document.getElementById('timeline-ndvi-value');
+        if (readout && ndviData && ndviData.ndvi !== undefined) {
+            readout.innerText = ndviData.ndvi.toFixed(2);
+        }
     }
 
     initCharts() {
@@ -639,10 +818,10 @@ class UIManager {
         }
 
         // --- IMMERSIVE INSIGHT CARD (SCREEN 2) ---
-        this.updateInsightCard(climateData, envData, ndviData);
+        this.updateInsightCard(climateData, envData, ndviData, shiData);
     }
 
-    updateInsightCard(climateData, envData, ndviData) {
+    updateInsightCard(climateData, envData, ndviData, shiData) {
         const card = document.getElementById('insight-card');
         const scanOverlay = document.getElementById('insight-scan-overlay');
         const legendBox = document.getElementById('ndvi-legend-box');
@@ -662,16 +841,21 @@ class UIManager {
             document.getElementById('node-temp').innerText = `${latest.avg_temp_c}°C`;
             document.getElementById('node-precip').innerText = `${latest.total_rainfall_mm}mm`;
             document.getElementById('node-anomaly').innerText = `${climateData.current_anomaly}°C`;
-            
-            if (ndviData) {
-                const riskVal = ndviData.wildfire_risk || "Low";
-                const riskPercent = ndviData.wildfire_risk_index || 45;
-                document.getElementById('node-risk').innerText = `${riskPercent}% (${riskVal})`;
-                
-                const riskElem = document.getElementById('node-risk');
-                if (riskVal === 'Low') riskElem.style.color = 'var(--success)';
-                else if (riskVal === 'Moderate') riskElem.style.color = 'var(--warning-amber)';
-                else riskElem.style.color = 'var(--danger)';
+
+            if (envData) {
+                document.getElementById('node-aqi').innerText = envData.air_quality_index ?? '--';
+                document.getElementById('node-co2').innerText = envData.co2_ppm ? `${envData.co2_ppm}` : '--';
+            }
+
+            if (shiData) {
+                document.getElementById('insight-shi-value').innerText = shiData.shi;
+                document.getElementById('insight-shi-risk').innerText = shiData.risk;
+
+                const badge = document.getElementById('insight-shi-badge');
+                badge.classList.remove('risk-healthy', 'risk-moderate', 'risk-poor');
+                if (shiData.shi >= 80) badge.classList.add('risk-healthy');
+                else if (shiData.shi >= 50) badge.classList.add('risk-moderate');
+                else badge.classList.add('risk-poor');
             }
 
             if (this.insightChart) {

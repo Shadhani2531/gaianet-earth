@@ -65,6 +65,24 @@ class GlobeManager {
             }
         });
 
+        // Tab 1 (Earth) is the cinematic, hands-off entry view: auto-rotate
+        // starts the moment the tab becomes active, and any manual camera
+        // movement (drag, zoom, tilt) — not just clicks — interrupts it.
+        document.addEventListener('tabSwitched', (e) => {
+            if (e.detail.tab === 'earth') {
+                this.startAutoRotation();
+            } else {
+                this.stopAutoRotation();
+            }
+        });
+
+        this.viewer.camera.moveStart.addEventListener(() => {
+            if (this._programmaticFlight) return;
+            if (document.body.getAttribute('data-active-tab') === 'earth') {
+                this.stopAutoRotation();
+            }
+        });
+
         // Listen for new reports submitted
         document.addEventListener('reportSubmitted', (e) => {
             this.addReportEntity(e.detail);
@@ -190,6 +208,12 @@ class GlobeManager {
 
     startAutoRotation() {
         console.log("Auto Rotation module activated");
+        this.isAutoRotating = true;
+        // Guard against the flyTo used to (re)start rotation immediately
+        // triggering moveStart and cancelling itself.
+        this._programmaticFlight = true;
+        setTimeout(() => { this._programmaticFlight = false; }, 3200);
+
         if (!this.autoRotateSubscription) {
             this.autoRotateSubscription = this.viewer.scene.preRender.addEventListener(() => {
                 if (this.isAutoRotating) {
@@ -205,14 +229,27 @@ class GlobeManager {
         }
     }
 
+    stopAutoRotation() {
+        this.isAutoRotating = false;
+    }
+
     initCamera() {
+        this._programmaticFlight = true;
         this.viewer.camera.flyTo({
             destination: Cesium.Cartesian3.fromDegrees(
                 CONFIG.DEFAULT_COORDINATES.lon,
                 CONFIG.DEFAULT_COORDINATES.lat,
                 CONFIG.DEFAULT_COORDINATES.height
             ),
-            duration: 3.0 // Cinematic fly-in
+            duration: 3.0, // Cinematic fly-in
+            complete: () => {
+                this._programmaticFlight = false;
+                // App loads on Tab 1 by default — begin the cinematic
+                // auto-rotate once the initial fly-in settles.
+                if (document.body.getAttribute('data-active-tab') === 'earth') {
+                    this.startAutoRotation();
+                }
+            }
         });
     }
 
@@ -220,6 +257,15 @@ class GlobeManager {
         const handler = new Cesium.ScreenSpaceEventHandler(this.viewer.scene.canvas);
         
         handler.setInputAction((movement) => {
+            const activeTab = document.body.getAttribute('data-active-tab');
+
+            // Tab 1 (Earth) is a pure cinematic viewer — clicking just
+            // interrupts auto-rotation, it never opens analytics/popups.
+            if (activeTab === 'earth') {
+                this.stopAutoRotation();
+                return;
+            }
+
             const pickedObject = this.viewer.scene.pick(movement.position);
             
             if (Cesium.defined(pickedObject)) {
@@ -557,6 +603,13 @@ class GlobeManager {
 
     async loadLocationAnalytics(lat, lon) {
         try {
+            // Track the most recently selected location so other panels
+            // (e.g. the Tab 4 What-If Simulator) can act on it without
+            // requiring a fresh click.
+            this.currentLat = lat;
+            this.currentLon = lon;
+            document.dispatchEvent(new CustomEvent('locationSelected', { detail: { lat, lon } }));
+
             // Screen 2: Top-Down Camera View (No Tilt as per User Request)
             this.viewer.camera.flyTo({
                 destination: Cesium.Cartesian3.fromDegrees(lon, lat, 2000000), 
@@ -915,6 +968,67 @@ class GlobeManager {
         }
         
         this.viewer.entities.resumeEvents();
+        this.viewer.scene.requestRender();
+    }
+
+    async renderGlobalShiHeatmap(countries) {
+        // Clear any previous heatmap layer
+        if (this.layers.globalShi) {
+            this.viewer.dataSources.remove(this.layers.globalShi);
+            this.layers.globalShi = null;
+        }
+
+        const boundaries = await api.getCountryBoundaries();
+        if (!boundaries || !boundaries.features) return;
+
+        // Real SHI data keyed by ISO alpha-2 code
+        const shiByCode = {};
+        countries.forEach(c => { shiByCode[c.country_code] = c; });
+
+        const dataSource = await Cesium.GeoJsonDataSource.load(boundaries, {
+            stroke: Cesium.Color.fromCssColorString('#0b0e14'),
+            strokeWidth: 1,
+            fill: Cesium.Color.WHITE.withAlpha(0.05) // default: no-data countries stay near-invisible
+        });
+
+        const entities = dataSource.entities.values;
+        for (const entity of entities) {
+            const code = entity.properties?.['ISO3166-1-Alpha-2']?.getValue();
+            const shiInfo = code ? shiByCode[code] : null;
+
+            if (!shiInfo) {
+                // No real data for this country — leave it unshaded, never guess.
+                if (entity.polygon) entity.polygon.material = Cesium.Color.WHITE.withAlpha(0.03);
+                continue;
+            }
+
+            let color = Cesium.Color.fromCssColorString('#ef4444'); // Poor
+            if (shiInfo.shi >= 80) color = Cesium.Color.fromCssColorString('#22c55e'); // Healthy
+            else if (shiInfo.shi >= 50) color = Cesium.Color.fromCssColorString('#eab308'); // Moderate
+
+            if (entity.polygon) {
+                entity.polygon.material = color.withAlpha(0.55);
+                entity.polygon.outline = true;
+                entity.polygon.outlineColor = Cesium.Color.WHITE.withAlpha(0.3);
+            }
+
+            entity._customData = {
+                type: 'shi_country',
+                name: shiInfo.country_name,
+                details: {
+                    "SHI Score": `${shiInfo.shi}/100`,
+                    "Risk Level": shiInfo.risk,
+                    "Real Components Used": (shiInfo.components_used || []).join(', '),
+                    ...(shiInfo.components?.air_quality ? {"Air Quality Component": `${shiInfo.components.air_quality.value}/100`} : {}),
+                    ...(shiInfo.components?.climate_stability ? {"Climate Component": `${shiInfo.components.climate_stability.value}/100`} : {}),
+                    ...(shiInfo.components?.vegetation ? {"Vegetation Component": `${shiInfo.components.vegetation.value}/100`} : {}),
+                    "Real Stations Sampled": shiInfo.station_count
+                }
+            };
+        }
+
+        this.viewer.dataSources.add(dataSource);
+        this.layers.globalShi = dataSource;
         this.viewer.scene.requestRender();
     }
 

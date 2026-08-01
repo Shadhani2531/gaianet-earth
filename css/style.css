@@ -220,6 +220,70 @@ body[data-active-tab="prediction"] .tab-item.active {
     padding: 0 2rem;
 }
 
+/* Timeline: curated location presets */
+.timelapse-presets {
+    position: fixed;
+    bottom: 114px;
+    left: 112px;
+    right: 380px;
+    padding: 10px 20px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+    border-radius: 16px;
+}
+
+.timelapse-presets-label {
+    font-size: 0.75rem;
+    color: var(--text-secondary);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    margin-right: 4px;
+}
+
+.preset-chip {
+    padding: 6px 14px;
+    background: rgba(0, 255, 194, 0.08);
+    border: 1px solid rgba(0, 255, 194, 0.25);
+    border-radius: 20px;
+    color: var(--text-primary);
+    font-size: 0.78rem;
+    font-family: inherit;
+    cursor: pointer;
+    transition: all 0.2s ease;
+}
+
+.preset-chip:hover {
+    background: var(--accent-color);
+    color: #000;
+    border-color: var(--accent-color);
+}
+
+/* Timeline: synced NDVI readout */
+.ndvi-readout {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 12px;
+    margin-left: 10px;
+    background: rgba(0, 0, 0, 0.25);
+    border: 1px solid var(--panel-border);
+    border-radius: 20px;
+    font-size: 0.8rem;
+    color: var(--text-secondary);
+}
+
+.ndvi-readout i {
+    color: var(--success);
+}
+
+#timeline-ndvi-value {
+    font-family: 'Outfit', sans-serif;
+    font-weight: 700;
+    color: var(--text-primary);
+}
+
 /* Layer Groups */
 .layer-group {
     display: flex;
@@ -300,19 +364,94 @@ input:checked ~ .label-text i {
     color: var(--accent-color);
 }
 
-/* Scenario Panel */
-.scenario-panel {
+/* Prediction Panel (Tab 4: What-If Simulator) */
+.prediction-panel {
     margin-top: 20px;
-    padding: 15px;
+    padding: 16px;
     background: rgba(0, 0, 0, 0.2);
-    border-radius: 8px;
+    border-radius: 12px;
     border: 1px solid var(--panel-border);
 }
 
-.scenario-panel h3 {
-    margin-bottom: 10px;
+.prediction-panel-header h3 {
     font-size: 1rem;
-    color: var(--warning);
+    color: var(--accent-color);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 6px;
+}
+
+.prediction-panel-sub {
+    font-size: 0.78rem;
+    color: var(--text-secondary);
+    line-height: 1.4;
+    margin-bottom: 16px;
+}
+
+.prediction-location {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 12px;
+    margin-bottom: 14px;
+    background: rgba(0, 0, 0, 0.25);
+    border: 1px solid var(--panel-border);
+    border-radius: 8px;
+    font-size: 0.78rem;
+    color: var(--text-secondary);
+}
+
+.prediction-location i {
+    color: var(--accent-color);
+}
+
+.prediction-location.selected {
+    color: var(--text-primary);
+}
+
+.prediction-biome-indicator {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 12px;
+    margin: 14px 0;
+    background: rgba(255, 184, 0, 0.06);
+    border: 1px solid rgba(255, 184, 0, 0.2);
+    border-radius: 8px;
+    font-size: 0.78rem;
+}
+
+.prediction-biome-indicator i {
+    color: var(--warning-amber);
+}
+
+.biome-note {
+    color: var(--text-secondary);
+    font-size: 0.7rem;
+    margin-left: auto;
+}
+
+.slider-label {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-size: 0.85rem;
+    color: var(--text-primary);
+    margin-bottom: 6px;
+}
+
+.slider-label i {
+    color: var(--accent-color);
+    margin-right: 6px;
+}
+
+.slider-readout {
+    font-family: 'Outfit', sans-serif;
+    font-weight: 700;
+    color: var(--accent-color);
+    min-width: 42px;
+    text-align: right;
 }
 
 .dropdown {
@@ -330,6 +469,155 @@ input:checked ~ .label-text i {
 .dropdown:focus {
     border-color: var(--accent-color);
 }
+
+.prediction-results {
+    margin-top: 20px;
+    padding-top: 16px;
+    border-top: 1px solid var(--panel-border);
+}
+
+/* Before/After SHI comparison — the signature moment of this panel */
+.shi-compare {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    margin-bottom: 16px;
+}
+
+.shi-compare-side {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 2px;
+    padding: 12px 8px;
+    background: rgba(0, 0, 0, 0.25);
+    border-radius: 10px;
+    border: 1px solid var(--panel-border);
+}
+
+.shi-compare-label {
+    font-size: 0.68rem;
+    letter-spacing: 1.5px;
+    text-transform: uppercase;
+    color: var(--text-secondary);
+}
+
+.shi-compare-value {
+    font-family: 'Outfit', sans-serif;
+    font-size: 2rem;
+    font-weight: 700;
+    color: var(--accent-color);
+    line-height: 1.1;
+}
+
+.shi-compare-risk {
+    font-size: 0.72rem;
+    color: var(--text-secondary);
+}
+
+.shi-compare-arrow {
+    color: var(--text-secondary);
+    font-size: 1.1rem;
+    flex-shrink: 0;
+}
+
+/* Colorize the "after" value based on direction of change via data attribute */
+.shi-compare-side.worse .shi-compare-value { color: var(--danger); }
+.shi-compare-side.worse .shi-compare-risk { color: var(--danger); }
+.shi-compare-side.better .shi-compare-value { color: var(--success); }
+.shi-compare-side.better .shi-compare-risk { color: var(--success); }
+
+.prediction-narrative {
+    font-size: 0.85rem;
+    line-height: 1.5;
+    color: var(--text-primary);
+    background: rgba(0, 255, 194, 0.05);
+    border-left: 2px solid var(--accent-color);
+    padding: 10px 12px;
+    border-radius: 4px;
+    margin-bottom: 14px;
+}
+
+.prediction-changes {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin-bottom: 12px;
+}
+
+.change-row {
+    padding: 10px 12px;
+    background: rgba(0, 0, 0, 0.2);
+    border-radius: 8px;
+    border: 1px solid var(--panel-border);
+}
+
+.change-row-top {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 4px;
+}
+
+.change-row-metric {
+    font-size: 0.8rem;
+    color: var(--text-primary);
+    font-weight: 500;
+}
+
+.change-row-delta {
+    font-family: 'Outfit', sans-serif;
+    font-weight: 700;
+    font-size: 0.9rem;
+}
+
+.change-row-delta.positive { color: var(--danger); }
+.change-row-delta.negative { color: var(--success); }
+
+.confidence-badge {
+    display: inline-block;
+    font-size: 0.62rem;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    padding: 2px 7px;
+    border-radius: 10px;
+    margin-right: 6px;
+    font-weight: 600;
+}
+
+.confidence-badge.measured {
+    background: rgba(34, 197, 94, 0.15);
+    color: var(--success);
+    border: 1px solid rgba(34, 197, 94, 0.3);
+}
+
+.confidence-badge.estimated {
+    background: rgba(255, 184, 0, 0.15);
+    color: var(--warning-amber);
+    border: 1px solid rgba(255, 184, 0, 0.3);
+}
+
+.confidence-badge.modeled {
+    background: rgba(148, 163, 184, 0.15);
+    color: var(--text-secondary);
+    border: 1px solid rgba(148, 163, 184, 0.3);
+}
+
+.change-row-basis {
+    font-size: 0.7rem;
+    color: var(--text-secondary);
+    line-height: 1.4;
+}
+
+.prediction-data-note {
+    font-size: 0.68rem;
+    color: var(--text-secondary);
+    font-style: italic;
+    text-align: center;
+}
+
 
 /* Buttons */
 .btn {
@@ -620,8 +908,8 @@ body.minimal-mode #minimal-toggle {
 .insight-card {
     position: absolute;
     bottom: 100px;
-    right: -400px; /* Hidden initially */
-    width: 380px;
+    right: -420px; /* Hidden initially */
+    width: 400px;
     padding: 24px;
     border-radius: 16px;
     z-index: 500;
@@ -639,6 +927,55 @@ body.minimal-mode #minimal-toggle {
     align-items: center;
     gap: 12px;
 }
+
+/* SHI badge — the headline number for this location, shown prominently
+   above the raw data grid so it's the first thing read. */
+.insight-shi-badge {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    padding: 14px 16px;
+    margin-bottom: 18px;
+    background: rgba(0, 255, 194, 0.06);
+    border: 1px solid rgba(0, 255, 194, 0.25);
+    border-radius: 12px;
+}
+
+.insight-shi-value {
+    font-family: 'Outfit', sans-serif;
+    font-size: 2.2rem;
+    font-weight: 700;
+    color: var(--accent-color);
+    line-height: 1;
+}
+
+.insight-shi-meta {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.insight-shi-label {
+    font-size: 0.7rem;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    color: var(--text-secondary);
+}
+
+.insight-shi-risk {
+    font-size: 0.9rem;
+    font-weight: 600;
+    color: var(--text-primary);
+}
+
+/* Risk-based coloring, mirrored from the SHI grade thresholds used
+   server-side (A/Healthy >=80, B/Moderate >=60, C/Poor >=40, D <40). */
+.insight-shi-badge.risk-healthy .insight-shi-value,
+.insight-shi-badge.risk-healthy .insight-shi-risk { color: var(--success); }
+.insight-shi-badge.risk-moderate .insight-shi-value,
+.insight-shi-badge.risk-moderate .insight-shi-risk { color: var(--warning-amber); }
+.insight-shi-badge.risk-poor .insight-shi-value,
+.insight-shi-badge.risk-poor .insight-shi-risk { color: var(--danger); }
 
 .insight-grid {
     display: grid;
@@ -897,14 +1234,17 @@ body[data-active-tab="prediction"] .right-panel {
     transform: translateX(0);
 }
 
+/* Tab 4: Prediction (What-If Simulator) */
+body[data-active-tab="prediction"] #prediction-panel,
+body[data-active-tab="forecast"] #prediction-panel {
+    display: block !important;
+}
+
 /* Tab 5: Lab */
 body[data-active-tab="lab"] .left-panel {
     opacity: 1;
     pointer-events: auto;
     transform: translateX(0);
-}
-body[data-active-tab="lab"] #scenario-panel {
-    display: block !important;
 }
 
 /* Utility to ensure dashboard container expands to handle sidebar */
@@ -1054,6 +1394,43 @@ body.minimal-mode .sidebar-tabs {
 
 .form-group textarea:focus {
     border-color: var(--accent-color);
+}
+
+.form-group input[type="text"],
+.form-group input[type="email"] {
+    background: var(--bg-dark);
+    color: var(--text-primary);
+    border: 1px solid var(--panel-border);
+    border-radius: 8px;
+    padding: 10px 12px;
+    font-family: inherit;
+    font-size: 0.9rem;
+    outline: none;
+}
+
+.form-group input[type="text"]:focus,
+.form-group input[type="email"]:focus {
+    border-color: var(--accent-color);
+}
+
+.form-optional {
+    font-weight: 400;
+    font-size: 0.75rem;
+    color: var(--text-secondary);
+}
+
+.segmented-picker {
+    display: flex;
+    gap: 6px;
+}
+
+.segmented-picker-wrap {
+    flex-wrap: wrap;
+}
+
+.segmented-picker-wrap label {
+    flex: 1 1 calc(33.333% - 6px);
+    min-width: 90px;
 }
 
 .severity-labels {
@@ -1251,6 +1628,14 @@ input[type="range"].timeline-slider::-webkit-slider-thumb:hover {
     border-color: var(--accent-color);
 }
 
+.report-card.report-aged {
+    opacity: 0.5;
+}
+
+.report-card.report-aged:hover {
+    opacity: 0.85;
+}
+
 .report-header {
     display: flex;
     justify-content: space-between;
@@ -1275,6 +1660,135 @@ input[type="range"].timeline-slider::-webkit-slider-thumb:hover {
     display: flex;
     justify-content: space-between;
 }
+
+.satellite-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 0.68rem;
+    font-weight: 600;
+    color: var(--success);
+    background: rgba(34, 197, 94, 0.12);
+    border: 1px solid rgba(34, 197, 94, 0.3);
+    padding: 3px 9px;
+    border-radius: 12px;
+    margin: 6px 0;
+}
+
+/* Tab 6: Global SHI Heatmap */
+.global-shi-sub {
+    font-size: 0.78rem;
+    color: var(--text-secondary);
+    line-height: 1.4;
+    margin-bottom: 16px;
+}
+
+.global-shi-status {
+    padding: 12px;
+    margin-bottom: 16px;
+    border-radius: 8px;
+    font-size: 0.8rem;
+    line-height: 1.4;
+}
+
+.global-shi-status.warning {
+    background: rgba(255, 184, 0, 0.1);
+    border: 1px solid rgba(255, 184, 0, 0.3);
+    color: var(--warning-amber);
+}
+
+.shi-legend {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 12px;
+    margin-bottom: 16px;
+    background: rgba(0, 0, 0, 0.2);
+    border-radius: 8px;
+    border: 1px solid var(--panel-border);
+}
+
+.shi-legend-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 0.78rem;
+    color: var(--text-secondary);
+}
+
+.swatch {
+    width: 14px;
+    height: 14px;
+    border-radius: 4px;
+    flex-shrink: 0;
+}
+
+.swatch-healthy { background: #22c55e; }
+.swatch-moderate { background: #eab308; }
+.swatch-poor { background: #ef4444; }
+.swatch-nodata { background: rgba(255,255,255,0.08); border: 1px dashed var(--panel-border); }
+
+.global-shi-ranking-title {
+    font-size: 0.9rem;
+    color: var(--text-secondary);
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    margin-bottom: 10px;
+}
+
+.global-shi-ranking {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    max-height: 400px;
+    overflow-y: auto;
+}
+
+.shi-rank-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 10px;
+    background: rgba(0, 0, 0, 0.2);
+    border-radius: 8px;
+    border: 1px solid var(--panel-border);
+    cursor: pointer;
+    transition: border-color 0.15s;
+}
+
+.shi-rank-row:hover {
+    border-color: var(--accent-color);
+}
+
+.shi-rank-position {
+    font-size: 0.7rem;
+    color: var(--text-secondary);
+    width: 20px;
+    flex-shrink: 0;
+}
+
+.shi-rank-name {
+    flex: 1;
+    font-size: 0.82rem;
+    color: var(--text-primary);
+}
+
+.shi-rank-components {
+    display: flex;
+    gap: 5px;
+    font-size: 0.7rem;
+    color: var(--text-secondary);
+}
+
+.shi-rank-score {
+    font-family: 'Outfit', sans-serif;
+    font-weight: 700;
+    font-size: 0.9rem;
+}
+
+.shi-rank-score.healthy { color: var(--success); }
+.shi-rank-score.moderate { color: var(--warning-amber); }
+.shi-rank-score.poor { color: var(--danger); }
 
 .segmented-picker input[type="radio"] {
     display: none;

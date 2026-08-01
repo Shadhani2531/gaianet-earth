@@ -1,5 +1,6 @@
 import csv
 import logging
+import math
 from io import StringIO
 import requests
 from datetime import datetime, timezone
@@ -116,3 +117,46 @@ def get_wildfires_geojson() -> Dict[str, Any]:
     except Exception as e:
         logger.error(f"Unexpected error in FIRMS service: {e}")
         return {"type": "FeatureCollection", "features": [], "metadata": {"status": "error"}}
+
+
+def _haversine_km(lat1, lon1, lat2, lon2):
+    """Great-circle distance between two points, in kilometers."""
+    R = 6371.0
+    p1, p2 = math.radians(lat1), math.radians(lat2)
+    dphi = math.radians(lat2 - lat1)
+    dlambda = math.radians(lon2 - lon1)
+    a = math.sin(dphi / 2) ** 2 + math.cos(p1) * math.cos(p2) * math.sin(dlambda / 2) ** 2
+    return 2 * R * math.asin(math.sqrt(a))
+
+
+def check_satellite_confirmation(lat: float, lon: float, incident_type: str, radius_km: float = 15.0) -> dict:
+    """
+    Cross-check a citizen report against real, live NASA FIRMS wildfire
+    detections. If the report is a fire/smoke-related incident and a real
+    satellite hotspot was detected within radius_km, mark it as
+    satellite-confirmed. This is the one honest bridge available between
+    citizen reports and real data — we only cross-check against wildfires
+    since that's the only point-detection real-time layer available (air
+    quality and NDVI are not per-incident detections in the same way).
+    """
+    if incident_type not in ("Fire", "fire", "wildfire", "smoke"):
+        return {"confirmed": False, "reason": "not_fire_related"}
+
+    try:
+        wildfires = get_wildfires_geojson()
+        for feature in wildfires.get("features", []):
+            coords = feature.get("geometry", {}).get("coordinates")
+            if not coords or len(coords) < 2:
+                continue
+            fire_lon, fire_lat = coords[0], coords[1]
+            distance = _haversine_km(lat, lon, fire_lat, fire_lon)
+            if distance <= radius_km:
+                return {
+                    "confirmed": True,
+                    "distance_km": round(distance, 1),
+                    "source": "NASA FIRMS active fire detection"
+                }
+        return {"confirmed": False, "reason": "no_nearby_hotspot"}
+    except Exception as e:
+        logger.warning(f"Satellite cross-check failed: {e}")
+        return {"confirmed": False, "reason": "check_unavailable"}

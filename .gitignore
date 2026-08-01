@@ -1,8 +1,11 @@
 # Environment
 .env
+backend/.env
 backend/venv/
 __pycache__/
 *.pyc
+*.db
+backend/data/
 
 # IDEs
 .vscode/

@@ -4,3 +4,4 @@ pydantic
 requests
 sqlalchemy
 httpx
+python-dotenv

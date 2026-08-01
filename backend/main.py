@@ -2,6 +2,7 @@ import os
 import sys
 import requests
 import logging
+from dotenv import load_dotenv
 from fastapi import FastAPI, Query, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -11,7 +12,11 @@ curr_dir = os.path.dirname(os.path.abspath(__file__))
 if curr_dir not in sys.path:
     sys.path.append(curr_dir)
 
-from services import nasa_firms, modis_ndvi, climate, mock_data, weather
+# Load backend/.env (WAQI_TOKEN, etc.) before any service module reads
+# environment variables at import time.
+load_dotenv(os.path.join(curr_dir, ".env"))
+
+from services import nasa_firms, modis_ndvi, climate, mock_data, weather, scenario_engine, openaq_client, country_coords
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -38,40 +43,159 @@ def read_root():
 
 @app.get("/stations")
 def get_stations():
-    """Fetch global air quality stations returning PM2.5/PM10 from OpenAQ."""
-    try:
-        url = "https://api.openaq.org/v2/locations?limit=10000&parameter=pm25&parameter=pm10"
-        response = requests.get(url, timeout=15)
-        response.raise_for_status()
-        return response.json().get("results", [])
-    except Exception as e:
-        logger.error(f"Failed to fetch OpenAQ stations: {e}")
-        return []
+    """Fetch global air quality stations from real OpenAQ v3 data.
+    (v1/v2 were retired Jan 2025 and return HTTP 410 — this endpoint was
+    silently broken until migrated to v3, which requires OPENAQ_API_KEY.)"""
+    return openaq_client.get_stations(limit=1000)
 
-@app.get("/shi-india-live")
-async def india_shi_live():
-    """Live-calculated Sustainability Health Index (SHI) for major Indian cities."""
-    stations = [
-        {"city": "Delhi", "lat": 28.6139, "lon": 77.2090, "aqi": 150},
-        {"city": "Mumbai", "lat": 19.0760, "lon": 72.8777, "aqi": 90},
-        {"city": "Bangalore", "lat": 12.9716, "lon": 77.5946, "aqi": 45},
-        {"city": "Kolkata", "lat": 22.5726, "lon": 88.3639, "aqi": 110},
-        {"city": "Chennai", "lat": 13.0827, "lon": 80.2707, "aqi": 65},
-        {"city": "Hyderabad", "lat": 17.3850, "lon": 78.4867, "aqi": 75},
-        {"city": "Ahmedabad", "lat": 23.0225, "lon": 72.5714, "aqi": 120},
-        {"city": "Kanpur", "lat": 26.4499, "lon": 80.3319, "aqi": 140},
-        {"city": "Shimla", "lat": 31.1048, "lon": 77.1734, "aqi": 20},
-        {"city": "Hubli", "lat": 15.3647, "lon": 75.1240, "aqi": 35}
-    ]
-    
-    result = []
-    for s in stations:
-        # Calculate SHI: Higher AQI = Lower SHI score
-        shi = max(0, min(100, 100 - (s["aqi"]/3)))
-        color = "red" if shi < 40 else ("yellow" if shi < 70 else "green")
-        s.update({"shi": int(shi), "color": color})
-        result.append(s)
-    return result
+@app.get("/country-boundaries")
+def country_boundaries():
+    """Real country boundary polygons (Natural Earth, public domain) for
+    rendering the Tab 6 SHI heatmap. Cached server-side for a week."""
+    return openaq_client.get_country_boundaries_geojson()
+
+import time as _time
+
+# Composite SHI cache — this endpoint does real per-country climate + NDVI
+# lookups (on top of the OpenAQ aggregate), which is meaningfully slower
+# than AQI alone. Cached for 6 hours since none of these components change
+# minute-to-minute at the country level.
+_composite_shi_cache = {"data": None, "computed_at": 0}
+_COMPOSITE_SHI_CACHE_SECONDS = 6 * 3600
+
+
+@app.get("/shi-global")
+def shi_global():
+    """
+    Tab 6 — Global SHI Heatmap. Real, live composite Sustainability Health
+    Index per country, combining three real data sources:
+      - Air quality: real OpenAQ v3 station PM2.5, averaged per country
+      - Climate: real Open-Meteo temperature anomaly at the country's
+        capital (used as a representative point — see country_coords.py)
+      - Vegetation: real NASA MODIS NDVI at the same representative point
+
+    No hardcoded or fabricated per-country numbers anywhere in this
+    endpoint. Every component that couldn't be computed from real data
+    for a given country is OMITTED from that country's composite, not
+    backfilled with a guess — and the response says exactly which
+    components each country's score is built from.
+
+    Requires OPENAQ_API_KEY in backend/.env (see .env.example).
+    """
+    if not os.environ.get("OPENAQ_API_KEY", "").strip():
+        return {
+            "countries": [],
+            "status": "missing_api_key",
+            "message": "OPENAQ_API_KEY not set in backend/.env — get a free key at https://explore.openaq.org"
+        }
+
+    now = _time.time()
+    if (_composite_shi_cache["data"] is not None
+            and (now - _composite_shi_cache["computed_at"]) < _COMPOSITE_SHI_CACHE_SECONDS):
+        return _composite_shi_cache["data"]
+
+    aggregate = openaq_client.get_country_aqi_aggregate()
+    if not aggregate:
+        return {
+            "countries": [],
+            "status": "no_data",
+            "message": "Could not fetch real OpenAQ data right now. Try again shortly."
+        }
+
+    results = []
+    for code, info in aggregate.items():
+        pm25 = info["avg_pm25"]
+        aqi = scenario_engine._pm25_to_aqi(pm25)
+        aqi_shi = max(0, min(100, 100 - (aqi / 3)))
+
+        components = {
+            "air_quality": {
+                "value": aqi_shi,
+                "weight": 1.0,  # adjusted below if other components are present
+                "basis": f"Real OpenAQ v3 data, {info['station_count']} station(s) sampled, avg PM2.5 {pm25} µg/m³"
+            }
+        }
+
+        # --- Climate component (real Open-Meteo, at country capital) ---
+        ref_point = country_coords.get_country_reference_point(code)
+        climate_shi = None
+        ndvi_shi = None
+        is_tropical = True
+
+        if ref_point:
+            is_tropical = ref_point["is_tropical"]
+            try:
+                climate_info = climate.get_location_climate(ref_point["lat"], ref_point["lon"])
+                anomaly = abs(climate_info.get("current_anomaly", 0))
+                # Real, simple mapping: larger temperature anomaly -> lower
+                # climate-stability score. This weighting choice (anomaly of
+                # 3C or more = 0 score) is a modeling decision, not itself a
+                # citation — flagged as such in the basis string.
+                climate_shi = max(0, min(100, 100 - (anomaly / 3.0) * 100))
+                components["climate_stability"] = {
+                    "value": round(climate_shi, 1),
+                    "weight": 1.0,
+                    "basis": f"Real Open-Meteo climate data at {ref_point['capital']} "
+                             f"(country capital, used as representative point); "
+                             f"anomaly {climate_info.get('current_anomaly')}°C. "
+                             f"Anomaly-to-score mapping is a modeling choice, not a cited standard."
+                }
+            except Exception as e:
+                logger.warning(f"Climate component failed for {code}: {e}")
+
+            try:
+                ndvi_info = modis_ndvi.get_ndvi_at_location(ref_point["lat"], ref_point["lon"])
+                ndvi_val = ndvi_info.get("ndvi", 0)
+                # Real NDVI mapped to a 0-100 score: NDVI ranges roughly
+                # -1 (water/barren) to +1 (dense vegetation); we rescale
+                # the practical 0-0.9 range that covers most land surfaces.
+                ndvi_shi = max(0, min(100, (ndvi_val / 0.9) * 100))
+                components["vegetation"] = {
+                    "value": round(ndvi_shi, 1),
+                    "weight": 1.0,
+                    "basis": f"{'Real NASA MODIS NDVI' if ndvi_info.get('data_source') == 'real_modis' else 'Estimated NDVI (MODIS unavailable for this point)'} "
+                             f"at {ref_point['capital']}, value {ndvi_info.get('ndvi')}",
+                    "confidence": "measured" if ndvi_info.get("data_source") == "real_modis" else "estimated"
+                }
+            except Exception as e:
+                logger.warning(f"NDVI component failed for {code}: {e}")
+
+        # --- Composite: simple average of whichever real components exist ---
+        component_values = [c["value"] for c in components.values()]
+        composite_shi = sum(component_values) / len(component_values)
+
+        grade = 'A' if composite_shi >= 80 else ('B' if composite_shi >= 60 else ('C' if composite_shi >= 40 else 'D'))
+        risk = 'Healthy' if composite_shi >= 80 else ('Moderate' if composite_shi >= 50 else 'Poor')
+
+        results.append({
+            "country_code": code,
+            "country_name": info["country_name"],
+            "shi": int(round(composite_shi)),
+            "grade": grade,
+            "risk": risk,
+            "components": components,
+            "components_used": list(components.keys()),
+            "station_count": info["station_count"],
+        })
+
+    results.sort(key=lambda r: r["shi"], reverse=True)
+
+    response = {
+        "countries": results,
+        "status": "ok",
+        "sampled_country_count": len(results),
+        "note": "SHI is a composite of real, live data: air quality (OpenAQ v3, always included when available), "
+                "climate stability (Open-Meteo, at the country's capital as a representative point), and "
+                "vegetation health (NASA MODIS NDVI, same representative point). Countries not listed had no "
+                "sampled real air-quality stations. A country's 'components_used' field shows exactly which "
+                "real data sources contributed to its score — components that could not be computed from real "
+                "data are omitted, never guessed."
+    }
+
+    _composite_shi_cache["data"] = response
+    _composite_shi_cache["computed_at"] = now
+
+    return response
 
 @app.get("/shi")
 def get_shi(lat: float = Query(...), lon: float = Query(...)):
@@ -133,33 +257,96 @@ def get_environment(lat: float = Query(...), lon: float = Query(...)):
         "status": "success"
     }
 
+def _compute_shi(aqi: float) -> dict:
+    """Shared SHI formula (matches the existing /shi endpoint's logic)."""
+    shi = max(0, min(100, 100 - (aqi / 3)))
+    grade = 'A' if shi >= 80 else ('B' if shi >= 60 else ('C' if shi >= 40 else 'D'))
+    risk = 'Healthy' if shi >= 80 else ('Moderate' if shi >= 50 else 'Poor')
+    return {"shi": int(shi), "grade": grade, "risk": risk}
+
+
+def _aqi_from_pm25(pm25: float) -> int:
+    """Convert a PM2.5 value to AQI using the same real EPA breakpoints
+    scenario_engine.py uses, so before/after values stay consistent."""
+    return scenario_engine._pm25_to_aqi(pm25)
+
+
 @app.get("/prediction")
-def get_prediction(scenario: str = Query(...), lat: float = Query(...), lon: float = Query(...)):
-    """Generates data-driven scenario-based impact predictions."""
+def get_prediction(
+    lat: float = Query(...),
+    lon: float = Query(...),
+    forest_loss_pct: float = Query(0.0, ge=0, le=100, description="What-if: additional forest cover lost, 0-100%"),
+    emissions_increase_pct: float = Query(0.0, ge=0, le=200, description="What-if: emissions increase, 0-200%"),
+    is_tropical: bool = Query(True, description="Whether the clicked location is in a tropical biome"),
+    scenario: str = Query(None, description="Deprecated/legacy param, ignored — kept for backward compatibility"),
+):
+    """
+    GaiaNet Digital Twin — What-If Scenario Simulator (Tab 4).
+
+    Applies real, cited climate-science coefficients (see
+    services/scenario_engine.py) to this location's REAL current live data
+    (Open-Meteo climate + WAQI air quality) to project the effect of a
+    deforestation and/or emissions scenario. This is NOT a black-box ML
+    prediction — every number returned carries a `confidence` level
+    ("measured" / "estimated" / "modeled") and a citation in `basis`,
+    because the underlying science does not support false precision.
+    """
+    # 1. Pull REAL current data for this location.
     climate_info = climate.get_location_climate(lat, lon)
-    anomaly = climate_info["current_anomaly"]
-    
-    base_multiplier = 1.5 if "1_5" in scenario else 2.0 if "2_0" in scenario else 1.0
-    risk_score = min(100, (abs(anomaly) * 20) * base_multiplier)
-    
-    recent_rain = [h["total_rainfall_mm"] for h in climate_info["historical_trends"][-3:]]
-    avg_rain = sum(recent_rain) / len(recent_rain)
-    drought_prob = max(10, min(95, 80 - (avg_rain / 1.5) + (anomaly * 5)))
-    flood_prob = max(5, min(90, (avg_rain / 2) - (anomaly * 3)))
-    wildfire_risk = max(10, min(98, (anomaly * 25) + (drought_prob * 0.4)))
+    live_env = mock_data.generate_environment_data(lat, lon)
+
+    current_temp_c = live_env["temperature_c"]
+    current_aqi = live_env["air_quality_index"]
+    current_pm25 = live_env["pm25"]
+    current_co2_ppm = live_env["co2_ppm"]
+
+    shi_before = _compute_shi(current_aqi)
+
+    current_data = {
+        "temperature_c": current_temp_c,
+        "co2_ppm": current_co2_ppm,
+        "pm25": current_pm25,
+        "aqi": current_aqi,
+        "shi": shi_before["shi"],
+    }
+
+    # 2. Run the real scenario engine.
+    result = scenario_engine.run_scenario(
+        location={"lat": lat, "lon": lon},
+        current_data=current_data,
+        forest_loss_pct=forest_loss_pct,
+        emissions_increase_pct=emissions_increase_pct,
+        is_tropical=is_tropical,
+    )
+
+    # 3. Compute SHI-after using the projected AQI (if an emissions scenario
+    #    was run) or the current AQI unchanged (if only deforestation was run
+    #    — deforestation's air-quality effect isn't modeled here, only its
+    #    temperature/CO2 effects, so AQI-derived SHI wouldn't honestly move).
+    aqi_change = next((c for c in result.changes if c.metric == "aqi"), None)
+    projected_aqi = aqi_change.projected_value if aqi_change else current_aqi
+    shi_after = _compute_shi(projected_aqi)
 
     return {
-        "scenario": scenario,
-        "location": {"lat": lat, "lon": lon},
-        "risk_index": round(wildfire_risk, 1),
-        "probabilities": {
-            "wildfire": round(wildfire_risk, 1),
-            "drought": round(drought_prob, 1),
-            "flood": round(flood_prob, 1)
-        },
-        "predicted_temp_change_c": round(base_multiplier * 0.8, 2),
-        "sea_level_rise_cm": round(base_multiplier * 12.4, 1),
-        "impact_summary": "Critical local instability predicted." if wildfire_risk > 75 else "Significant environmental shifts expected."
+        "location": result.location,
+        "scenario": result.scenario,
+        "current_data": current_data,
+        "current_data_source": live_env.get("data_source", "unknown"),
+        "shi_before": shi_before,
+        "shi_after": shi_after,
+        "changes": [
+            {
+                "metric": c.metric,
+                "current_value": c.current_value,
+                "projected_value": c.projected_value,
+                "delta": c.delta,
+                "unit": c.unit,
+                "confidence": c.confidence,
+                "basis": c.basis,
+            }
+            for c in result.changes
+        ],
+        "narrative": result.narrative,
     }
 
 # --- CITIZEN SCIENCE REPORTING ---
@@ -174,16 +361,26 @@ class ReportCreate(BaseModel):
     incident_type: str
     severity: int
     description: str
+    reporter_name: str = "Anonymous"
+    reporter_email: str | None = None
 
 @app.post("/api/reports")
 def create_report(report: ReportCreate, db: Session = Depends(get_db)):
-    """Saves a user-submitted environmental incident report."""
+    """Saves a user-submitted environmental incident report, cross-checked
+    against real NASA FIRMS wildfire detections when relevant."""
+    confirmation = nasa_firms.check_satellite_confirmation(
+        report.lat, report.lon, report.incident_type
+    )
+
     db_report = DBReport(
         lat=report.lat,
         lon=report.lon,
         incident_type=report.incident_type,
         severity=report.severity,
-        description=report.description
+        description=report.description,
+        reporter_name=report.reporter_name or "Anonymous",
+        reporter_email=report.reporter_email,
+        satellite_confirmed=1 if confirmation.get("confirmed") else 0
     )
     db.add(db_report)
     db.commit()

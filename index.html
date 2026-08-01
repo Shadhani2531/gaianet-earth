@@ -72,6 +72,9 @@
         <div class="tab-item" data-tab="reports" title="Community Reports">
             <i class="fa-solid fa-bullhorn"></i>
         </div>
+        <div class="tab-item" data-tab="global-shi" title="Global Health Index">
+            <i class="fa-solid fa-globe"></i>
+        </div>
     </nav>
 
     <!-- Main Content Area -->
@@ -119,29 +122,68 @@
                 <!-- Dynamically populated -->
             </div>
 
-            <div id="scenario-panel" class="scenario-panel hidden">
-                 <h3>Simulate Scenarios</h3>
-                 <select id="scenario-select" class="dropdown">
-                     <option value="">Select a scenario...</option>
-                     <option value="temp_increase_1_5">+1.5°C Global Temp Increase</option>
-                     <option value="temp_increase_2_0">+2.0°C Global Temp Increase</option>
-                     <option value="deforestation_high">High Deforestation Rate</option>
-                 </select>
-                 <button id="run-scenario-btn" class="btn primary-btn mt-2">Run Simulation</button>
-                 
-                 <div class="divider mt-2"></div>
-                 <h3>Global Parameters</h3>
-                 <div class="control-group">
-                     <label>Temp Offset: <span id="temp-offset-val">0</span>°C</label>
-                     <input type="range" id="global-temp-slider" min="-5" max="5" value="0" step="0.5" class="timeline-slider">
-                 </div>
-                 <div class="control-group mt-2">
-                     <label>Rainfall Offset: <span id="rain-offset-val">0</span>%</label>
-                     <input type="range" id="global-rain-slider" min="-100" max="100" value="0" step="10" class="timeline-slider">
-                 </div>
-                 <button id="apply-global-btn" class="btn primary-btn mt-2">Apply All</button>
+            <div id="prediction-panel" class="prediction-panel hidden">
+                <div class="prediction-panel-header">
+                    <h3><i class="fa-solid fa-flask-vial"></i> What-If Simulator</h3>
+                    <p class="prediction-panel-sub">Adjust real environmental pressures for this location and see the projected effect — grounded in cited climate science, not a black box.</p>
+                </div>
 
-                 <div id="simulation-results" class="simulation-results mt-2"></div>
+                <div class="prediction-location" id="prediction-location">
+                    <i class="fa-solid fa-location-dot"></i>
+                    <span id="prediction-location-text">Click anywhere on the globe to select a location</span>
+                </div>
+
+                <div class="control-group">
+                    <label class="slider-label">
+                        <span><i class="fa-solid fa-tree"></i> Deforestation increase</span>
+                        <span class="slider-readout" id="deforestation-val">0%</span>
+                    </label>
+                    <input type="range" id="deforestation-slider" min="0" max="100" value="0" step="5" class="timeline-slider">
+                </div>
+
+                <div class="control-group mt-2">
+                    <label class="slider-label">
+                        <span><i class="fa-solid fa-industry"></i> Emissions increase</span>
+                        <span class="slider-readout" id="emissions-val">0%</span>
+                    </label>
+                    <input type="range" id="emissions-slider" min="0" max="200" value="0" step="5" class="timeline-slider">
+                </div>
+
+                <div class="prediction-biome-indicator" id="prediction-biome-indicator">
+                    <i class="fa-solid fa-sun"></i>
+                    <span id="prediction-biome-text">Biome: —</span>
+                    <span class="biome-note">(auto-detected from latitude)</span>
+                </div>
+
+                <button id="run-prediction-btn" class="btn primary-btn mt-2" style="width: 100%; justify-content: center;">
+                    <i class="fa-solid fa-play"></i> Project outcome
+                </button>
+
+                <div id="prediction-results" class="prediction-results hidden">
+
+                    <div class="shi-compare">
+                        <div class="shi-compare-side">
+                            <span class="shi-compare-label">Now</span>
+                            <span class="shi-compare-value" id="shi-before-val">--</span>
+                            <span class="shi-compare-risk" id="shi-before-risk">--</span>
+                        </div>
+                        <i class="fa-solid fa-arrow-right shi-compare-arrow"></i>
+                        <div class="shi-compare-side">
+                            <span class="shi-compare-label">Projected</span>
+                            <span class="shi-compare-value" id="shi-after-val">--</span>
+                            <span class="shi-compare-risk" id="shi-after-risk">--</span>
+                        </div>
+                    </div>
+
+                    <p class="prediction-narrative" id="prediction-narrative"></p>
+
+                    <div id="prediction-changes" class="prediction-changes">
+                        <!-- Populated dynamically: one row per metric change, each with a
+                             confidence badge (measured / estimated / modeled) -->
+                    </div>
+
+                    <p class="prediction-data-note" id="prediction-data-note"></p>
+                </div>
             </div>
 
         </aside>
@@ -171,22 +213,36 @@
             <div id="insight-header">
                 <h3 id="insight-title"><i class="fa-solid fa-satellite"></i> Insight</h3>
             </div>
+
+            <!-- SHI badge: this location's Sustainability Health Index -->
+            <div class="insight-shi-badge" id="insight-shi-badge">
+                <span class="insight-shi-value" id="insight-shi-value">--</span>
+                <div class="insight-shi-meta">
+                    <span class="insight-shi-label">Health Index</span>
+                    <span class="insight-shi-risk" id="insight-shi-risk">--</span>
+                </div>
+            </div>
+
             <div class="insight-grid" id="insight-stats">
                 <div class="data-node">
                     <span class="label">Temperature</span>
                     <span class="value" id="node-temp">--°C</span>
                 </div>
                 <div class="data-node">
+                    <span class="label">Air Quality (AQI)</span>
+                    <span class="value" id="node-aqi">--</span>
+                </div>
+                <div class="data-node">
+                    <span class="label">CO₂ (ppm)</span>
+                    <span class="value" id="node-co2">--</span>
+                </div>
+                <div class="data-node">
                     <span class="label">Rainfall</span>
                     <span class="value" id="node-precip">--mm</span>
                 </div>
                 <div class="data-node">
-                    <span class="label">Anomaly</span>
+                    <span class="label">Temp Anomaly</span>
                     <span class="value" id="node-anomaly">--°C</span>
-                </div>
-                <div class="data-node">
-                    <span class="label">Risk Index</span>
-                    <span class="value" id="node-risk">--%</span>
                 </div>
             </div>
             <div class="chart-container" style="height: 140px;">
@@ -256,10 +312,39 @@
                 <p class="text-secondary small">Syncing live community incidents...</p>
             </div>
         </aside>
+
+        <!-- Screen 7: Global SHI Heatmap -->
+        <aside id="global-shi-panel" class="panel right-panel glass-panel hidden">
+            <h2><i class="fa-solid fa-globe"></i> Global Health Index</h2>
+            <p class="global-shi-sub">Country-level Sustainability Health Index, computed live from real OpenAQ air-quality stations. Countries with no data are left unshaded, never guessed.</p>
+
+            <div id="global-shi-status" class="global-shi-status hidden"></div>
+
+            <div class="shi-legend">
+                <div class="shi-legend-item"><span class="swatch swatch-healthy"></span> Healthy (80+)</div>
+                <div class="shi-legend-item"><span class="swatch swatch-moderate"></span> Moderate (50-79)</div>
+                <div class="shi-legend-item"><span class="swatch swatch-poor"></span> Poor (&lt;50)</div>
+                <div class="shi-legend-item"><span class="swatch swatch-nodata"></span> No data</div>
+            </div>
+
+            <h3 class="global-shi-ranking-title">Rankings</h3>
+            <div id="global-shi-ranking" class="global-shi-ranking">
+                <p class="text-secondary small">Loading real station data...</p>
+            </div>
+        </aside>
     </main>
 
     <!-- 4D Temporal Engine Overlay -->
     <div id="split-divider" class="split-divider hidden"></div>
+
+    <!-- Curated timelapse starting points -->
+    <div id="timelapse-presets" class="timelapse-presets glass-panel hidden">
+        <span class="timelapse-presets-label">Notable changes:</span>
+        <button class="preset-chip" data-lat="-3.4653" data-lon="-62.2159" data-height="1200000" data-name="Amazon Rainforest, Brazil">Amazon deforestation</button>
+        <button class="preset-chip" data-lat="45.0" data-lon="60.0" data-height="900000" data-name="Aral Sea, Kazakhstan/Uzbekistan">Aral Sea shrinking</button>
+        <button class="preset-chip" data-lat="25.0762" data-lon="55.1302" data-height="500000" data-name="Dubai, UAE">Dubai urban growth</button>
+        <button class="preset-chip" data-lat="64.1836" data-lon="-51.7214" data-height="700000" data-name="Greenland Ice Sheet">Greenland ice retreat</button>
+    </div>
 
     <footer class="bottom-panel glass-panel shimmer-edge">
         <div class="timeline-controls">
@@ -285,6 +370,9 @@
             <div class="timeline-actions">
                 <button id="split-screen-btn" class="btn secondary-btn small-btn"><i class="fa-solid fa-columns"></i> SPLIT</button>
                 <span id="current-date-display" class="date-badge">MARCH 2026</span>
+                <span id="timeline-ndvi-readout" class="ndvi-readout" title="Vegetation density (NDVI) at this point in time">
+                    <i class="fa-solid fa-seedling"></i> <span id="timeline-ndvi-value">--</span>
+                </span>
             </div>
         </div>
     </footer>
@@ -299,18 +387,37 @@
             <form id="report-form">
                 <div class="form-group">
                     <label>Incident Type</label>
-                    <div class="segmented-picker">
+                    <div class="segmented-picker segmented-picker-wrap">
                         <input type="radio" name="incident-type" value="Fire" id="type-fire" checked>
-                        <label for="type-fire">🔥 Fire</label>
-                        
+                        <label for="type-fire">🔥 Fire/Smoke</label>
+
                         <input type="radio" name="incident-type" value="Pollution" id="type-pollution">
-                        <label for="type-pollution">🌫️ Smog</label>
-                        
+                        <label for="type-pollution">🌫️ Air Pollution</label>
+
                         <input type="radio" name="incident-type" value="Deforestation" id="type-logging">
-                        <label for="type-logging">🌲 Logging</label>
+                        <label for="type-logging">🌲 Deforestation</label>
+
+                        <input type="radio" name="incident-type" value="Water" id="type-water">
+                        <label for="type-water">💧 Water Pollution</label>
+
+                        <input type="radio" name="incident-type" value="Flooding" id="type-flooding">
+                        <label for="type-flooding">🌊 Flooding</label>
+
+                        <input type="radio" name="incident-type" value="Other" id="type-other">
+                        <label for="type-other">❓ Other</label>
                     </div>
                 </div>
-                
+
+                <div class="form-group">
+                    <label>Your Name</label>
+                    <input type="text" id="reporter-name" placeholder="Anonymous" maxlength="60">
+                </div>
+
+                <div class="form-group">
+                    <label>Email <span class="form-optional">(optional — for follow-up only, never shown publicly)</span></label>
+                    <input type="email" id="reporter-email" placeholder="you@example.com">
+                </div>
+
                 <div class="form-group">
                     <label>Severity Level: <span id="severity-val">3</span></label>
                     <input type="range" id="report-severity" min="1" max="5" step="1" value="3" class="timeline-slider">
