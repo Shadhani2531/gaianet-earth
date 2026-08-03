@@ -1,5 +1,12 @@
 class GlobeManager {
     constructor() {
+        // Historical timeline range: MODIS Terra coverage begins Feb 2000,
+        // so anything earlier would show today's imagery mislabeled as
+        // history rather than real historical imagery. Capped at the
+        // present year since there's no future imagery to show either.
+        this.TIMELINE_START_YEAR = 2000;
+        this.TIMELINE_END_YEAR = new Date().getFullYear();
+
         if (CONFIG.CESIUM_ION_TOKEN) {
             Cesium.Ion.defaultAccessToken = CONFIG.CESIUM_ION_TOKEN;
         }
@@ -24,8 +31,18 @@ class GlobeManager {
             // Removed requestRenderMode to restore native smooth zooming/panning
         });
 
-        // Disable default browser context menu on the globe
-        document.getElementById('cesiumContainer').addEventListener('contextmenu', (e) => e.preventDefault());
+        // Disable the native browser context menu app-wide — previously
+        // this only applied to the globe canvas, so right-clicking over any
+        // UI panel (sidebar, reports feed, etc.) still showed the OS/browser
+        // menu, which looks like a jarring, out-of-place white box against
+        // this UI. Text inputs/textareas are excluded so copy/paste/select-all
+        // still work the normal way where people expect them to.
+        document.addEventListener('contextmenu', (e) => {
+            const tag = e.target.tagName;
+            if (tag !== 'INPUT' && tag !== 'TEXTAREA') {
+                e.preventDefault();
+            }
+        });
 
         // Dark sky/space background for aesthetic
         this.viewer.scene.skyAtmosphere.hueShift = -0.5;
@@ -41,7 +58,6 @@ class GlobeManager {
             ndviImagery: null, // Track imagery layer separately
             wildfires: [],
             sensors: [],
-            shi: [],
             reports: []
         };
 
@@ -68,8 +84,8 @@ class GlobeManager {
         // Tab 1 (Earth) is the cinematic, hands-off entry view: auto-rotate
         // starts the moment the tab becomes active, and any manual camera
         // movement (drag, zoom, tilt) — not just clicks — interrupts it.
-        document.addEventListener('tabSwitched', (e) => {
-            if (e.detail.tab === 'earth') {
+        AppState.subscribe((state) => {
+            if (state.activeTab === 'earth') {
                 this.startAutoRotation();
             } else {
                 this.stopAutoRotation();
@@ -78,9 +94,25 @@ class GlobeManager {
 
         this.viewer.camera.moveStart.addEventListener(() => {
             if (this._programmaticFlight) return;
-            if (document.body.getAttribute('data-active-tab') === 'earth') {
+            if (AppState.activeTab === 'earth') {
+                clearTimeout(this._resumeRotationTimeout);
                 this.stopAutoRotation();
             }
+        });
+
+        // Resume the cinematic auto-rotate a short moment after the user
+        // stops dragging/zooming/tilting — previously nothing ever
+        // restarted it, so one manual nudge silently killed it forever.
+        this.viewer.camera.moveEnd.addEventListener(() => {
+            if (this._programmaticFlight) return;
+            if (AppState.activeTab !== 'earth') return;
+
+            clearTimeout(this._resumeRotationTimeout);
+            this._resumeRotationTimeout = setTimeout(() => {
+                if (AppState.activeTab === 'earth') {
+                    this.startAutoRotation();
+                }
+            }, 2000);
         });
 
         // Listen for new reports submitted
@@ -90,21 +122,63 @@ class GlobeManager {
     }
 
     async searchLocation(query) {
+        const foundViaIon = await this._tryIonGeocode(query);
+        if (foundViaIon) return true;
+
+        // Fallback: free, key-free OpenStreetMap search. Runs whenever Ion's
+        // geocoder throws OR simply returns zero results, so search doesn't
+        // have a single point of failure tied to one paid service's token.
+        return this.searchLocationViaNominatim(query);
+    }
+
+    async _tryIonGeocode(query) {
         try {
-            // Use Cesium Ion Geocoder as primary
             const geocoder = new Cesium.IonGeocoderService();
             const results = await geocoder.geocode(query);
-            
+
             if (results && results.length > 0) {
-                const destination = results[0].destination;
-                const name = results[0].displayName;
-                
-                this.flyToDestination(destination, name);
+                this.flyToDestination(results[0].destination, results[0].displayName);
                 return true;
             }
             return false;
         } catch (error) {
-            console.error("Geocoding failed:", error);
+            console.error("Cesium Ion geocoding failed:", error);
+
+            // Distinguish "the token/service failed" from "no results found"
+            // — these need different messages. An expired/invalid Cesium Ion
+            // token surfaces as a 401/403 here.
+            const status = error?.statusCode || error?.response?.status;
+            const message = (error?.message || "").toLowerCase();
+            const looksLikeAuthFailure = status === 401 || status === 403
+                || message.includes("unauthorized") || message.includes("token");
+
+            if (looksLikeAuthFailure) {
+                document.dispatchEvent(new CustomEvent('layerNotice', {
+                    detail: { message: 'Cesium Ion search token may have expired — trying a backup search instead.' }
+                }));
+            }
+            return false;
+        }
+    }
+
+    async searchLocationViaNominatim(query) {
+        try {
+            const url = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(query)}&format=json&limit=1`;
+            const response = await fetch(url, { headers: { 'Accept': 'application/json' } });
+            if (!response.ok) return false;
+
+            const results = await response.json();
+            if (!results || results.length === 0) return false;
+
+            const { lat, lon, display_name } = results[0];
+            // 500km altitude reads as "zoomed to city/region level," similar
+            // to how Google Maps settles after a search — not a wide fit,
+            // not a claustrophobic close-up.
+            const destination = Cesium.Cartesian3.fromDegrees(parseFloat(lon), parseFloat(lat), 500000);
+            this.flyToDestination(destination, display_name);
+            return true;
+        } catch (error) {
+            console.error("Nominatim geocoding failed:", error);
             return false;
         }
     }
@@ -209,6 +283,7 @@ class GlobeManager {
     startAutoRotation() {
         console.log("Auto Rotation module activated");
         this.isAutoRotating = true;
+        AppState.setRotating(true);
         // Guard against the flyTo used to (re)start rotation immediately
         // triggering moveStart and cancelling itself.
         this._programmaticFlight = true;
@@ -216,14 +291,30 @@ class GlobeManager {
 
         if (!this.autoRotateSubscription) {
             this.autoRotateSubscription = this.viewer.scene.preRender.addEventListener(() => {
-                if (this.isAutoRotating) {
+                // Belt-and-suspenders: only ever rotate while isAutoRotating
+                // is true AND AppState confirms Tab 1 (Earth) is genuinely
+                // the active tab right now. Checking AppState directly here,
+                // rather than trusting isAutoRotating alone, means rotation
+                // can't keep running on another tab even if some other
+                // event path fails to call stopAutoRotation() in time.
+                const onEarthTab = AppState.activeTab === 'earth';
+
+                if (this.isAutoRotating && onEarthTab) {
                     const speed = this.rotationSpeedMultiplier || 1;
-                    
-                    // Rotate the camera around the global Z-axis (North Pole)
-                    this.viewer.scene.camera.rotate(Cesium.Cartesian3.UNIT_Z, 0.005 * speed);
+
+                    // Rotate the camera around the global Z-axis (North Pole).
+                    // Slowed from 0.005 to 0.0015 rad/frame (~1 full spin per
+                    // ~70s instead of ~21s) — the old speed was fast enough
+                    // to cause motion discomfort for a cinematic idle view.
+                    this.viewer.scene.camera.rotate(Cesium.Cartesian3.UNIT_Z, 0.0015 * speed);
                     
                     // Force the scene to render if it's sluggish 
                     this.viewer.scene.requestRender();
+                } else if (this.isAutoRotating && !onEarthTab) {
+                    // Flag says "rotating" but we're not on Tab 1 anymore —
+                    // force it off now rather than spinning silently forever.
+                    this.isAutoRotating = false;
+                    AppState.setRotating(false);
                 }
             });
         }
@@ -231,6 +322,7 @@ class GlobeManager {
 
     stopAutoRotation() {
         this.isAutoRotating = false;
+        AppState.setRotating(false);
     }
 
     initCamera() {
@@ -246,7 +338,7 @@ class GlobeManager {
                 this._programmaticFlight = false;
                 // App loads on Tab 1 by default — begin the cinematic
                 // auto-rotate once the initial fly-in settles.
-                if (document.body.getAttribute('data-active-tab') === 'earth') {
+                if (AppState.activeTab === 'earth') {
                     this.startAutoRotation();
                 }
             }
@@ -257,7 +349,7 @@ class GlobeManager {
         const handler = new Cesium.ScreenSpaceEventHandler(this.viewer.scene.canvas);
         
         handler.setInputAction((movement) => {
-            const activeTab = document.body.getAttribute('data-active-tab');
+            const activeTab = AppState.activeTab;
 
             // Tab 1 (Earth) is a pure cinematic viewer — clicking just
             // interrupts auto-rotation, it never opens analytics/popups.
@@ -310,23 +402,45 @@ class GlobeManager {
         }, Cesium.ScreenSpaceEventType.RIGHT_CLICK);
 
         // Update layers based on UI toggles
-        document.getElementById('layer-wildfires').addEventListener('change', (e) => this.toggleWildfires(e.target.checked));
-        document.getElementById('layer-temp').addEventListener('change', (e) => this.toggleEnvironmentalLayer(e.target.checked, 'temperature'));
+        document.getElementById('layer-wildfires').addEventListener('change', (e) => {
+            AppState.setLayerActive('layer-wildfires', e.target.checked);
+            this.toggleWildfires(e.target.checked);
+        });
+        document.getElementById('layer-temp').addEventListener('change', (e) => {
+            AppState.setLayerActive('layer-temp', e.target.checked);
+            this.toggleEnvironmentalLayer(e.target.checked, 'temperature');
+        });
         document.getElementById('layer-ndvi').addEventListener('change', (e) => this.toggleEnvironmentalLayer(e.target.checked, 'ndvi'));
-        document.getElementById('layer-satellite').addEventListener('change', (e) => this.toggleSatelliteView(e.target.checked));
-        document.getElementById('layer-sensors').addEventListener('change', (e) => this.toggleSensors(e.target.checked));
-        document.getElementById('layer-shi').addEventListener('change', (e) => this.toggleShi(e.target.checked));
+        document.getElementById('layer-rainfall').addEventListener('change', (e) => {
+            AppState.setLayerActive('layer-rainfall', e.target.checked);
+            this.toggleEnvironmentalLayer(e.target.checked, 'rainfall');
+        });
+        document.getElementById('layer-weather').addEventListener('change', (e) => {
+            AppState.setLayerActive('layer-weather', e.target.checked);
+            this.toggleEnvironmentalLayer(e.target.checked, 'weather');
+        });
+        document.getElementById('layer-sensors').addEventListener('change', (e) => {
+            AppState.setLayerActive('layer-sensors', e.target.checked);
+            this.toggleSensors(e.target.checked);
+        });
 
-        // Time Slider Integration
-        const timeSlider = document.getElementById('time-slider');
-        timeSlider.addEventListener('input', (e) => this.updateTime(e.target.value));
+        // Time Slider Integration.
+        // Was looking for id="time-slider" — the actual element is
+        // id="timeline-slider". That mismatch meant this threw a
+        // TypeError (addEventListener on null) every single time,
+        // uncaught, from inside this constructor — which is very likely
+        // why the Historical Changes tab never rendered anything.
+        const timeSlider = document.getElementById('timeline-slider');
+        if (timeSlider) {
+            timeSlider.addEventListener('input', (e) => this.updateTime(e.target.value));
+        } else {
+            console.error('timeline-slider element not found — historical timeline will not respond to dragging.');
+        }
 
         // Level of Detail (LOD) based on camera height
         this.viewer.camera.moveEnd.addEventListener(() => {
             this.applyLOD();
         });
-
-        this.renderLegends();
     }
 
     async toggleSatelliteView(visible) {
@@ -340,24 +454,42 @@ class GlobeManager {
             return;
         }
 
-        // 1. Seamless Base Layer (Blue Marble) to fill gaps
+        // Idempotent: if satellite is already on, do nothing rather than
+        // stacking a second set of imagery layers on top of the first.
+        // Without this guard, calling toggleSatelliteView(true) while
+        // already visible (e.g. switchTab running twice for the same tab)
+        // added duplicate overlapping layers — likely the cause of the
+        // "satellite view coming and going" flicker.
+        if (this.layers.satellite) {
+            return;
+        }
+
+        // 1. Seamless Base Layer (Blue Marble) to fill gaps.
+        // Switched from the geographic (epsg4326) endpoint to GIBS' Web
+        // Mercator (epsg3857) GoogleMapsCompatible endpoint — this matches
+        // Cesium's native default tiling scheme exactly (no custom
+        // tilingScheme needed), which is the integration path GIBS' own
+        // examples recommend. The epsg4326 + GeographicTilingScheme
+        // combination from last round only partially matched GIBS' actual
+        // tile matrix layout, which is what caused the partial/wedged
+        // rendering.
         const baseProvider = new Cesium.WebMapTileServiceImageryProvider({
-            url: 'https://gibs.earthdata.nasa.gov/wmts/epsg4326/best/wmts.cgi',
+            url: 'https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/wmts.cgi',
             layer: 'BlueMarble_NextGeneration',
             style: 'default',
             format: 'image/jpeg',
-            tileMatrixSetID: '500m',
+            tileMatrixSetID: 'GoogleMapsCompatible_Level8',
             maximumLevel: 8,
             credit: 'NASA GIBS (Blue Marble)'
         });
 
         // 2. High-res Swath Layer (MODIS) for detail
         const imageryProvider = new Cesium.WebMapTileServiceImageryProvider({
-            url: 'https://gibs.earthdata.nasa.gov/wmts/epsg4326/best/wmts.cgi',
+            url: 'https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/wmts.cgi',
             layer: 'MODIS_Terra_CorrectedReflectance_TrueColor',
             style: 'default',
             format: 'image/jpeg',
-            tileMatrixSetID: '250m',
+            tileMatrixSetID: 'GoogleMapsCompatible_Level9',
             maximumLevel: 9,
             credit: 'NASA GIBS (MODIS Terra)'
         });
@@ -368,9 +500,12 @@ class GlobeManager {
     }
 
     updateTime(value, type = 'primary') {
-        // Expanded Range: 1984 through 2030 (approx 550 months)
-        const startYear = 1984;
-        const totalMonths = (2030 - 1984) * 12;
+        // Range: 2000 (MODIS Terra coverage begins Feb 2000 — anything
+        // earlier would just show today's imagery mislabeled as history,
+        // not real historical imagery) through the present year (no future
+        // imagery exists to show either).
+        const startYear = this.TIMELINE_START_YEAR;
+        const totalMonths = (this.TIMELINE_END_YEAR - startYear) * 12;
         const currentMonthTotal = Math.floor((value / 100) * totalMonths);
         const year = startYear + Math.floor(currentMonthTotal / 12);
         const month = (currentMonthTotal % 12) + 1;
@@ -379,14 +514,25 @@ class GlobeManager {
         
         if (type === 'primary') {
             this.currentDate = dateStr;
-            this.rotateToTime(value);
+            this.rotateToTime(value); // Instant — no debounce, stays smooth while dragging
             if (window.ui) window.ui.updateDateDisplay(value, 'primary');
         } else {
             this.historicalDate = dateStr;
             if (window.ui) window.ui.updateDateDisplay(value, 'historical');
         }
 
-        this.refreshImageryLayers();
+        // Debounce the actual imagery fetch. Dragging the slider fires many
+        // 'input' events per second, and each one used to trigger an
+        // immediate full GIBS tile refresh — dozens of full reloads while
+        // dragging, which is what caused the lag and tile-popping. Waiting
+        // until the user pauses for 200ms means the date label and camera
+        // rotation stay instantly responsive while dragging, and imagery
+        // only loads once, right after they settle on a date.
+        clearTimeout(this._imageryRefreshTimeout);
+        this._imageryRefreshTimeout = setTimeout(() => {
+            this.refreshImageryLayers();
+        }, 200);
+
         console.log(`4D Engine [${type.toUpperCase()}]: ${dateStr}`);
     }
 
@@ -398,7 +544,7 @@ class GlobeManager {
         const delta = sliderValue - this.lastSliderValue;
         if (Math.abs(delta) < 0.1) return; // Ignore micro-jitters
         
-        const totalYears = (2030 - 1984);
+        const totalYears = (this.TIMELINE_END_YEAR - this.TIMELINE_START_YEAR);
         const deltaYears = (delta / 100) * totalYears;
         
         // 1 Year = 360 degrees (per user requirement)
@@ -424,7 +570,7 @@ class GlobeManager {
         }
 
         if (this.isSplitMode) {
-            this.refreshNdviImagery(this.historicalDate || "1984-01-01", 
+            this.refreshNdviImagery(this.historicalDate || "2000-02-01", 
                 Cesium.SplitDirection.LEFT, 
                 'historicalNdvi'
             );
@@ -475,11 +621,11 @@ class GlobeManager {
         const oldLayer = this.layers.satellite;
         
         const provider = new Cesium.WebMapTileServiceImageryProvider({
-            url: 'https://gibs.earthdata.nasa.gov/wmts/epsg4326/best/wmts.cgi',
+            url: 'https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/wmts.cgi',
             layer: 'MODIS_Terra_CorrectedReflectance_TrueColor',
             style: 'default',
             format: 'image/jpeg',
-            tileMatrixSetID: '250m',
+            tileMatrixSetID: 'GoogleMapsCompatible_Level9',
             maximumLevel: 9,
             parameters: { time: date }
         });
@@ -542,24 +688,6 @@ class GlobeManager {
         document.addEventListener('mousemove', move);
     }
 
-    renderLegends() {
-        const container = document.getElementById('layer-legend');
-        if (!container) return;
-        
-        container.innerHTML = `
-            <div class="legend-item">
-                <span class="legend-label">Vegetation (NDVI)</span>
-                <div class="gradient-bar" style="background: linear-gradient(to right, #a16207, #84cc16, #14532d)"></div>
-                <div class="legend-values"><span>Arid</span><span>Dense</span></div>
-            </div>
-            <div class="legend-item">
-                <span class="legend-label">Temperature Anomaly</span>
-                <div class="gradient-bar" style="background: linear-gradient(to right, #0000ff, #ffff00, #ff0000)"></div>
-                <div class="legend-values"><span>Cold</span><span>Extreme</span></div>
-            </div>
-        `;
-    }
-
     showEntityInfo(entity) {
         const data = entity._customData;
         if (!data) return;
@@ -603,16 +731,26 @@ class GlobeManager {
 
     async loadLocationAnalytics(lat, lon) {
         try {
-            // Track the most recently selected location so other panels
-            // (e.g. the Tab 4 What-If Simulator) can act on it without
-            // requiring a fresh click.
-            this.currentLat = lat;
-            this.currentLon = lon;
-            document.dispatchEvent(new CustomEvent('locationSelected', { detail: { lat, lon } }));
+            // AppState.setSelectedLocation is now the single source of truth
+            // for "what location is selected" — previously this was tracked
+            // here AND separately in UIManager, kept in sync only by a
+            // custom event (plus one spot that reached directly into this
+            // object's fields from ui.js).
+            AppState.setSelectedLocation(lat, lon);
 
-            // Screen 2: Top-Down Camera View (No Tilt as per User Request)
+            // Screen 2: Top-Down Camera View (No Tilt as per User Request).
+            // Preserve the user's EXACT current zoom level — no forced
+            // zoom-out, no forced zoom-in. The previous version clamped a
+            // 50,000m minimum "so the view doesn't feel claustrophobic,"
+            // but that itself forced a zoom-out for anyone closer than
+            // 50km, which is most of the time when inspecting a specific
+            // spot. Only keeping the upper cap, which guards against the
+            // original "always jumps to a fixed 2,000,000m" bug.
+            const currentHeight = this.viewer.camera.positionCartographic.height;
+            const targetHeight = Math.min(currentHeight, 2000000);
+
             this.viewer.camera.flyTo({
-                destination: Cesium.Cartesian3.fromDegrees(lon, lat, 2000000), 
+                destination: Cesium.Cartesian3.fromDegrees(lon, lat, targetHeight),
                 orientation: {
                     heading: Cesium.Math.toRadians(0),
                     pitch: Cesium.Math.toRadians(-90),
@@ -643,7 +781,18 @@ class GlobeManager {
         }
 
         const data = await api.getWildfires();
-        if(!data) return;
+        if (!data) {
+            document.dispatchEvent(new CustomEvent('layerNotice', {
+                detail: { message: 'Could not reach the wildfire data feed — check that the backend server is running.' }
+            }));
+            return;
+        }
+        if (!data.features || data.features.length === 0) {
+            document.dispatchEvent(new CustomEvent('layerNotice', {
+                detail: { message: 'No active wildfires detected in the last 24 hours — this is a real "all clear," not an error.' }
+            }));
+            return;
+        }
 
         try {
             const dataSource = await Cesium.GeoJsonDataSource.load(data, {
@@ -655,10 +804,17 @@ class GlobeManager {
                 const entity = entities[i];
                 const frp = entity.properties.frp ? entity.properties.frp.getValue() : 10;
                 
-                // Normalizing color Yellow -> Orange -> Red
-                let color = Cesium.Color.YELLOW;
-                if (frp > 100) color = Cesium.Color.RED;
-                else if (frp > 40) color = Cesium.Color.ORANGE;
+                // 5-tier severity spectrum by Fire Radiative Power (MW),
+                // not just 3 buckets — low-intensity detections (the
+                // majority of real ones) now read distinctly from
+                // moderate/high/severe/extreme instead of collapsing into
+                // one "yellow" bucket.
+                let color;
+                if (frp <= 10) color = Cesium.Color.fromCssColorString('#eab308');   // Low
+                else if (frp <= 40) color = Cesium.Color.fromCssColorString('#f97316'); // Moderate
+                else if (frp <= 100) color = Cesium.Color.fromCssColorString('#ef4444'); // High
+                else if (frp <= 300) color = Cesium.Color.fromCssColorString('#b91c1c'); // Severe
+                else color = Cesium.Color.fromCssColorString('#7f1d1d');                 // Extreme
 
                 entity.point = {
                     pixelSize: Math.min(12, 6 + frp/50),
@@ -714,10 +870,6 @@ class GlobeManager {
     }
 
     async toggleEnvironmentalLayer(visible, type) {
-        if (type === 'ndvi') {
-            return this.toggleNdviSatellite(visible);
-        }
-
         if (!visible) {
             if (this.layers[type]) {
                 this.viewer.dataSources.remove(this.layers[type]);
@@ -726,8 +878,32 @@ class GlobeManager {
             return;
         }
 
-        const data = await api.getClimate();
-        if(!data) return;
+        // All four render as real colored data points from our own
+        // backend — reliable, since we control the data end to end, unlike
+        // the GIBS imagery tile layer NDVI used to rely on (that endpoint's
+        // exact tile matrix conventions proved unreliable even under
+        // direct testing, and is still used separately for Tab 3's
+        // historical imagery comparison, where an actual image layer adds
+        // real value).
+        const fetchers = {
+            ndvi: () => api.getVegetation(),
+            temperature: () => api.getClimate(),
+            rainfall: () => api.getRainfall(),
+            weather: () => api.getWeatherConditions(),
+        };
+        const labels = {
+            ndvi: 'vegetation', temperature: 'temperature',
+            rainfall: 'rainfall', weather: 'weather conditions',
+        };
+        const data = await fetchers[type]();
+        const label = labels[type];
+
+        if (!data || !data.features || data.features.length === 0) {
+            document.dispatchEvent(new CustomEvent('layerNotice', {
+                detail: { message: `Could not load ${label} data — check that the backend server is running.` }
+            }));
+            return;
+        }
 
         try {
             const dataSource = await Cesium.GeoJsonDataSource.load(data, { clampToGround: true });
@@ -735,12 +911,30 @@ class GlobeManager {
             for (let i = 0; i < entities.length; i++) {
                 const entity = entities[i];
                 const val = entity.properties.value ? entity.properties.value.getValue() : 0;
-                
-                // Blue -> Yellow -> Red (Anomaly)
+
                 let color;
-                if (val < 0) color = Cesium.Color.BLUE;
-                else if (val < 1.0) color = Cesium.Color.YELLOW;
-                else color = Cesium.Color.RED;
+                if (type === 'ndvi') {
+                    // Sparse (brown) -> mid (yellow-green) -> dense (dark green)
+                    if (val < 0.2) color = Cesium.Color.fromCssColorString('#a16207');
+                    else if (val < 0.5) color = Cesium.Color.fromCssColorString('#84cc16');
+                    else color = Cesium.Color.fromCssColorString('#14532d');
+                } else if (type === 'temperature') {
+                    // Blue -> Yellow -> Red (Anomaly)
+                    if (val < 0) color = Cesium.Color.BLUE;
+                    else if (val < 1.0) color = Cesium.Color.YELLOW;
+                    else color = Cesium.Color.RED;
+                } else if (type === 'rainfall') {
+                    // Dry -> light rain -> heavy rain (mm in the last hour)
+                    if (val <= 0) color = Cesium.Color.fromCssColorString('#78716c'); // Dry
+                    else if (val < 2.5) color = Cesium.Color.fromCssColorString('#7dd3fc'); // Light
+                    else if (val < 10) color = Cesium.Color.fromCssColorString('#0ea5e9'); // Moderate
+                    else color = Cesium.Color.fromCssColorString('#1e3a8a'); // Heavy
+                } else {
+                    // Weather conditions: cloud cover %, clear -> overcast
+                    if (val < 25) color = Cesium.Color.fromCssColorString('#fde047'); // Clear
+                    else if (val < 60) color = Cesium.Color.fromCssColorString('#cbd5e1'); // Partly cloudy
+                    else color = Cesium.Color.fromCssColorString('#64748b'); // Overcast
+                }
 
                 entity.point = {
                     pixelSize: 6,
@@ -749,7 +943,7 @@ class GlobeManager {
                 };
                 
                 entity._customData = {
-                    type: 'climate',
+                    type: label,
                     value: val,
                     lat: Cesium.Math.toDegrees(Cesium.Cartographic.fromCartesian(entity.position.getValue()).latitude),
                     lon: Cesium.Math.toDegrees(Cesium.Cartographic.fromCartesian(entity.position.getValue()).longitude)
@@ -762,19 +956,6 @@ class GlobeManager {
         } catch (e) {
             console.error(`Error loading layer ${type}:`, e);
         }
-    }
-
-    async toggleNdviSatellite(visible) {
-        if (!visible) {
-            if (this.layers.ndviImagery) {
-                this.viewer.imageryLayers.remove(this.layers.ndviImagery);
-                this.layers.ndviImagery = null;
-            }
-            return;
-        }
-
-        if (!this.currentDate) this.currentDate = '2024-01-01';
-        this.refreshNdviImagery();
     }
 
     listenForScenarios() {
@@ -865,27 +1046,37 @@ class GlobeManager {
             return;
         }
 
-        // Fetch OpenAQ real global stations
-        const stations = await api.getStations();
-        if (!stations || !stations.length) return;
+        // Real per-station readings, resolved server-side — NOT /stations,
+        // which is metadata only. The old code read s.parameters[].lastValue
+        // directly from /stations, but that field never existed in OpenAQ
+        // v3's response shape, so pmValue silently defaulted to 0 for every
+        // single station — which is why every dot rendered green regardless
+        // of real air quality.
+        const stations = await api.getStationsWithReadings();
+        if (!stations || !stations.length) {
+            document.dispatchEvent(new CustomEvent('layerNotice', {
+                detail: { message: 'No live air-quality readings available right now — check that OPENAQ_API_KEY is set in backend/.env, or try again shortly.' }
+            }));
+            return;
+        }
 
         this.viewer.entities.suspendEvents();
 
         stations.forEach((s) => {
             if (!s.coordinates) return;
 
-            let pmValue = 0;
-            if (s.parameters) {
-                s.parameters.forEach(p => {
-                    if ((p.parameter === 'pm25' || p.parameter === 'pm10') && p.lastValue) {
-                        pmValue = Math.max(pmValue, p.lastValue);
-                    }
-                });
-            }
+            const pmValue = s.pm25;
 
-            let color = Cesium.Color.fromCssColorString('#22c55e'); // Green
-            if (pmValue >= 50 && pmValue <= 100) color = Cesium.Color.fromCssColorString('#eab308'); // Yellow
-            else if (pmValue > 100) color = Cesium.Color.fromCssColorString('#ef4444'); // Red
+            // Standard EPA PM2.5 AQI color spectrum (6 tiers) rather than a
+            // coarse 3-bucket split — this is the actual "full color
+            // gradient/severity scale" the toggle should show.
+            let color;
+            if (pmValue <= 12) color = Cesium.Color.fromCssColorString('#22c55e');      // Good
+            else if (pmValue <= 35.4) color = Cesium.Color.fromCssColorString('#eab308'); // Moderate
+            else if (pmValue <= 55.4) color = Cesium.Color.fromCssColorString('#f97316'); // Unhealthy (sensitive)
+            else if (pmValue <= 150.4) color = Cesium.Color.fromCssColorString('#ef4444'); // Unhealthy
+            else if (pmValue <= 250.4) color = Cesium.Color.fromCssColorString('#a855f7'); // Very Unhealthy
+            else color = Cesium.Color.fromCssColorString('#7f1d1d');                       // Hazardous
 
             const entity = this.viewer.entities.add({
                 position: Cesium.Cartesian3.fromDegrees(s.coordinates.longitude, s.coordinates.latitude),
@@ -900,13 +1091,13 @@ class GlobeManager {
 
             entity._customData = {
                 type: 'air_quality_station',
-                name: s.name || s.location || "Station",
+                name: s.name || "Station",
                 lat: s.coordinates.latitude,
                 lon: s.coordinates.longitude,
                 details: {
                     "Country": s.country || "Unknown",
                     "City": s.city || "Unknown",
-                    "PM Level": pmValue.toFixed(2) + " µg/m³",
+                    "PM2.5": pmValue.toFixed(1) + " µg/m³",
                     "Status": "Online"
                 }
             };
@@ -914,59 +1105,6 @@ class GlobeManager {
             this.layers.sensors.push(entity);
         });
 
-        this.viewer.entities.resumeEvents();
-        this.viewer.scene.requestRender();
-    }
-
-    async toggleShi(visible) {
-        if (!visible) {
-            if (this.layers.shi) {
-                this.layers.shi.forEach(e => this.viewer.entities.remove(e));
-            }
-            this.layers.shi = [];
-            return;
-        }
-
-        const stations = await api.getShiIndiaLive();
-        if (!stations || !stations.length) return;
-
-        this.viewer.entities.suspendEvents();
-        
-        for (const data of stations) {
-            let color = Cesium.Color.fromCssColorString('#ef4444'); // Red
-            if (data.shi >= 80) color = Cesium.Color.fromCssColorString('#22c55e'); // Green
-            else if (data.shi >= 50) color = Cesium.Color.fromCssColorString('#eab308'); // Yellow
-
-            let radius = 150000;
-            if (data.shi >= 80) radius = 100000;
-            else if (data.shi < 50) radius = 200000;
-
-            const entity = this.viewer.entities.add({
-                position: Cesium.Cartesian3.fromDegrees(data.lon, data.lat),
-                ellipse: {
-                    semiMinorAxis: radius,
-                    semiMajorAxis: radius,
-                    material: color.withAlpha(0.6),
-                    outline: true,
-                    outlineColor: Cesium.Color.WHITE,
-                    heightReference: Cesium.HeightReference.CLAMP_TO_GROUND
-                }
-            });
-            
-            entity._customData = {
-                type: 'shi_region',
-                name: data.city || "India Station",
-                lat: data.lat,
-                lon: data.lon,
-                details: {
-                    "Live PM2.5": data.aqi.toFixed(1) + " µg/m³",
-                    "SHI Score": Math.round(data.shi) + "/100",
-                    "Risk Level": data.shi >= 80 ? 'Healthy' : (data.shi >= 50 ? 'Moderate' : 'Poor')
-                }
-            };
-            this.layers.shi.push(entity);
-        }
-        
         this.viewer.entities.resumeEvents();
         this.viewer.scene.requestRender();
     }

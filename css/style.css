@@ -5,6 +5,7 @@
     --panel-border: rgba(255, 255, 255, 0.15);
     --text-primary: #ffffff;
     --text-secondary: #94a3b8;
+    --text-muted: #64748b;
     --accent-color: #00FFC2; /* Emerald Cyan */
     --accent-hover: #00e6af;
     --warning-amber: #FFB800;
@@ -175,8 +176,55 @@ body[data-active-tab="prediction"] .tab-item.active {
 .floating-controller { z-index: 30; }
 .modal-overlay, .sensor-popup, .neural-overlay { z-index: 100 !important; }
 
+/* Lightweight notice for degraded/no-data layer states (e.g. a toggle that
+   needs an API key that hasn't been configured yet) — surfaces the same
+   "why is nothing showing" information the console already logs, but
+   visibly, instead of the toggle just silently doing nothing. */
+.gn-toast {
+    position: fixed;
+    bottom: 110px;
+    left: 50%;
+    transform: translateX(-50%) translateY(12px);
+    background: var(--panel-bg, rgba(20, 24, 32, 0.92));
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    border-radius: 12px;
+    padding: 12px 20px;
+    color: #fff;
+    font-size: 0.85rem;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    z-index: 250;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.3s ease, transform 0.3s ease;
+    max-width: 420px;
+}
+.gn-toast.gn-toast-visible {
+    opacity: 1;
+    transform: translateX(-50%) translateY(0);
+}
+.gn-toast i { color: #eab308; }
+
 /* Global Hidden State - Force removal from flow */
 .hidden { display: none !important; }
+
+/* Glass panels (backdrop-filter) are a special case: Chromium fails to
+   repaint a backdrop-filter layer the first time it goes from
+   display:none straight to visible via a class toggle — the panel's
+   content is genuinely in the DOM, it just stays visually blank until
+   something else forces a repaint (e.g. opening the right-click context
+   menu). Keeping these specific panels in the render tree via
+   opacity/visibility avoids the bug entirely, and doubles as a smooth
+   fade transition using .glass-panel's existing `transition: all 0.3s`. */
+.glass-panel.hidden {
+    display: block !important;
+    opacity: 0 !important;
+    visibility: hidden !important;
+    pointer-events: none !important;
+}
 
 /* Existing Panel Positions (Refined) */
 .top-nav {
@@ -198,7 +246,10 @@ body[data-active-tab="prediction"] .tab-item.active {
     top: 100px;
     left: 112px;
     width: 320px;
+    max-height: calc(100vh - 200px);
+    overflow-y: auto;
     padding: 1.5rem;
+    transition: width 0.25s ease, padding 0.25s ease;
 }
 
 .right-panel {
@@ -209,6 +260,72 @@ body[data-active-tab="prediction"] .tab-item.active {
     max-height: calc(100vh - 200px);
     overflow-y: auto;
     padding: 1.5rem;
+    transition: width 0.25s ease, padding 0.25s ease;
+}
+
+.panel-header-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+}
+
+.panel-collapse-btn {
+    background: none;
+    border: none;
+    color: var(--text-secondary);
+    cursor: pointer;
+    padding: 6px;
+    flex-shrink: 0;
+    border-radius: 6px;
+    transition: color 0.2s ease, background 0.2s ease;
+}
+.panel-collapse-btn:hover {
+    color: var(--accent-color);
+    background: rgba(255, 255, 255, 0.06);
+}
+
+/* Collapsed state: shrink to a slim icon-only rail rather than vanishing
+   entirely, so it's obvious the panel still exists and is one click away.
+   All body content is hidden via width/opacity, not display:none, so the
+   width transition above still animates smoothly. */
+.left-panel.collapsed,
+.right-panel.collapsed {
+    width: 56px;
+    padding: 1.5rem 0.75rem;
+    overflow: hidden;
+}
+.left-panel.collapsed > *:not(.panel-header-row),
+.right-panel.collapsed > *:not(.panel-header-row) {
+    display: none;
+}
+.left-panel.collapsed .panel-header-row h2 span,
+.right-panel.collapsed .panel-header-row h2 span {
+    display: none;
+}
+
+/* Subtle scrollbar for panels that can scroll — thin and low-contrast so
+   it reads as part of the glass surface, not a jarring default browser bar. */
+.left-panel::-webkit-scrollbar,
+.right-panel::-webkit-scrollbar {
+    width: 6px;
+}
+.left-panel::-webkit-scrollbar-track,
+.right-panel::-webkit-scrollbar-track {
+    background: transparent;
+}
+.left-panel::-webkit-scrollbar-thumb,
+.right-panel::-webkit-scrollbar-thumb {
+    background: rgba(255, 255, 255, 0.15);
+    border-radius: 10px;
+}
+.left-panel::-webkit-scrollbar-thumb:hover,
+.right-panel::-webkit-scrollbar-thumb:hover {
+    background: rgba(255, 255, 255, 0.3);
+}
+.left-panel, .right-panel {
+    scrollbar-width: thin;
+    scrollbar-color: rgba(255, 255, 255, 0.15) transparent;
 }
 
 .bottom-panel {
@@ -529,6 +646,92 @@ input:checked ~ .label-text i {
 .shi-compare-side.better .shi-compare-value { color: var(--success); }
 .shi-compare-side.better .shi-compare-risk { color: var(--success); }
 
+/* Reusable info-icon reveal — for transparency/methodology notes that
+   should be available on demand rather than always-on paragraph text. */
+.story-readout {
+    position: fixed;
+    bottom: 210px;
+    left: 112px;
+    width: 320px;
+    padding: 1rem 1.25rem;
+    z-index: 200;
+    animation: fadeInUp 0.3s ease;
+}
+.story-readout-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 8px;
+}
+#story-readout-title {
+    font-size: 0.85rem;
+    font-weight: 600;
+    color: var(--text-primary);
+}
+.small-icon-btn {
+    width: 24px;
+    height: 24px;
+    font-size: 0.7rem;
+}
+.story-readout-number {
+    font-family: 'Outfit', sans-serif;
+    font-size: 1.6rem;
+    font-weight: 700;
+    color: var(--accent-color);
+    line-height: 1.3;
+    margin-bottom: 8px;
+}
+.story-readout-basis {
+    font-size: 0.7rem;
+    color: var(--text-secondary);
+    line-height: 1.4;
+}
+
+@keyframes fadeInUp {
+    from { opacity: 0; transform: translateY(8px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+
+.info-icon-wrap {
+    position: relative;
+    display: inline-flex;
+    margin-left: 4px;
+}
+.info-icon {
+    font-size: 0.72rem;
+    color: var(--text-secondary);
+    cursor: help;
+    transition: color 0.2s ease;
+}
+.info-icon:hover {
+    color: var(--accent-color);
+}
+.info-icon-tooltip {
+    position: absolute;
+    top: 130%;
+    left: 0;
+    width: 240px;
+    background: rgba(11, 14, 20, 0.97);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    border-radius: 8px;
+    padding: 10px 12px;
+    font-size: 0.7rem;
+    font-weight: 400;
+    line-height: 1.4;
+    color: var(--text-secondary);
+    text-transform: none;
+    letter-spacing: normal;
+    opacity: 0;
+    pointer-events: none;
+    transform: translateY(4px);
+    transition: opacity 0.2s ease, transform 0.2s ease;
+    z-index: 300;
+}
+.info-icon-wrap:hover .info-icon-tooltip {
+    opacity: 1;
+    transform: translateY(0);
+}
+
 .prediction-narrative {
     font-size: 0.85rem;
     line-height: 1.5;
@@ -538,6 +741,37 @@ input:checked ~ .label-text i {
     padding: 10px 12px;
     border-radius: 4px;
     margin-bottom: 14px;
+}
+
+.prediction-science-details {
+    margin-bottom: 12px;
+}
+
+.prediction-science-details summary {
+    font-size: 0.72rem;
+    color: var(--text-secondary);
+    cursor: pointer;
+    padding: 4px 0 10px 0;
+    list-style: none;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    user-select: none;
+    transition: color 0.2s ease;
+}
+.prediction-science-details summary:hover {
+    color: var(--accent-color);
+}
+.prediction-science-details summary::-webkit-details-marker {
+    display: none;
+}
+.prediction-science-details summary::before {
+    content: '\25B8'; /* right-pointing triangle */
+    font-size: 0.65rem;
+    transition: transform 0.2s ease;
+}
+.prediction-science-details[open] summary::before {
+    transform: rotate(90deg);
 }
 
 .prediction-changes {
@@ -603,6 +837,12 @@ input:checked ~ .label-text i {
     background: rgba(148, 163, 184, 0.15);
     color: var(--text-secondary);
     border: 1px solid rgba(148, 163, 184, 0.3);
+}
+
+.confidence-badge.cited {
+    background: rgba(0, 255, 194, 0.12);
+    color: var(--accent-color);
+    border: 1px solid rgba(0, 255, 194, 0.3);
 }
 
 .change-row-basis {
@@ -1128,6 +1368,21 @@ body.minimal-mode #minimal-toggle {
     font-size: 0.7rem;
     color: var(--text-muted);
 }
+
+.legend-dots {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-bottom: 3px;
+}
+
+.legend-dot {
+    width: 9px;
+    height: 9px;
+    border-radius: 50%;
+    flex-shrink: 0;
+}
+
 /* --- 5-TAB NAVIGATION SYSTEM --- */
 
 .sidebar-tabs {
@@ -1238,13 +1493,6 @@ body[data-active-tab="prediction"] .right-panel {
 body[data-active-tab="prediction"] #prediction-panel,
 body[data-active-tab="forecast"] #prediction-panel {
     display: block !important;
-}
-
-/* Tab 5: Lab */
-body[data-active-tab="lab"] .left-panel {
-    opacity: 1;
-    pointer-events: auto;
-    transform: translateX(0);
 }
 
 /* Utility to ensure dashboard container expands to handle sidebar */
@@ -1464,6 +1712,15 @@ body.minimal-mode .sidebar-tabs {
     background: rgba(11, 14, 20, 0.4);
     backdrop-filter: var(--glass-blur);
     border: var(--panel-border);
+}
+
+#search-trigger {
+    cursor: pointer;
+    color: var(--text-secondary);
+    transition: color 0.2s ease;
+}
+#search-trigger:hover {
+    color: var(--accent-color);
 }
 
 .search-input {

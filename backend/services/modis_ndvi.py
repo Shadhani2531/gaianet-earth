@@ -6,6 +6,7 @@ import math
 import requests
 from datetime import datetime, timezone, timedelta
 from typing import Dict, Any, Optional
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 logger = logging.getLogger(__name__)
 
@@ -170,23 +171,50 @@ def get_vegetation_geojson() -> Dict[str, Any]:
             return _ndvi_cache
             
     try:
-        features = []
         real_count = 0
         fallback_count = 0
         step = 10 # Coarser grid for the GeoJSON overview if imagery is used
-        for lat in range(-60, 80, step):
-            for lon in range(-180, 180, step):
-                data = get_ndvi_at_location(lat, lon)
-                if data["data_source"] == "real_modis":
-                    real_count += 1
-                else:
-                    fallback_count += 1
-                features.append({
-                    "type": "Feature",
-                    "geometry": {"type": "Point", "coordinates": [lon, lat]},
-                    "properties": {"value": data["ndvi"], "ndvi": data["ndvi"], "type": "vegetation",
-                                   "data_source": data["data_source"]}
-                })
+
+        grid_points = [
+            (lat, lon)
+            for lat in range(-60, 80, step)
+            for lon in range(-180, 180, step)
+        ]
+
+        # Fetch all grid points concurrently instead of one at a time — with
+        # up to 504 points, sequential fetching (each a real network call to
+        # ORNL DAAC) could take several minutes before returning anything at
+        # all, which looked identical to "the layer shows nothing" from the
+        # frontend's perspective. 30 workers is safe here since each request
+        # is I/O-bound (waiting on the network), not CPU-bound.
+        results = {}
+        with ThreadPoolExecutor(max_workers=30) as executor:
+            future_to_point = {
+                executor.submit(get_ndvi_at_location, lat, lon): (lat, lon)
+                for lat, lon in grid_points
+            }
+            for future in as_completed(future_to_point):
+                point = future_to_point[future]
+                try:
+                    results[point] = future.result()
+                except Exception as e:
+                    logger.warning(f"NDVI fetch failed for {point}: {e}")
+
+        features = []
+        for (lat, lon) in grid_points:
+            data = results.get((lat, lon))
+            if data is None:
+                continue
+            if data["data_source"] == "real_modis":
+                real_count += 1
+            else:
+                fallback_count += 1
+            features.append({
+                "type": "Feature",
+                "geometry": {"type": "Point", "coordinates": [lon, lat]},
+                "properties": {"value": data["ndvi"], "ndvi": data["ndvi"], "type": "vegetation",
+                               "data_source": data["data_source"]}
+            })
         
         # Honest label: this grid is a MIX of real MODIS pixels and biome
         # estimates (oceans, persistent cloud cover, and API timeouts fall

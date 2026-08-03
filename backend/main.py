@@ -24,10 +24,25 @@ logger = logging.getLogger(__name__)
 
 app = FastAPI(title="GaiaNet Earth API", description="Production-grade Environmental Intelligence Gateway")
 
-# Configure CORS
+# Configure CORS. Wide open (["*"]) was fine for early local-only
+# development, but was never actually needed — this app serves its own
+# frontend same-origin (see the StaticFiles mount at the bottom of this
+# file). Now configurable via CORS_ALLOWED_ORIGINS (comma-separated) in
+# backend/.env, defaulting to common local-dev origins so nothing breaks
+# out of the box. Set CORS_ALLOWED_ORIGINS=* explicitly if you ever need
+# the old wide-open behavior back (e.g. testing from an external client).
+_cors_origins_env = os.environ.get("CORS_ALLOWED_ORIGINS", "").strip()
+if _cors_origins_env:
+    _allowed_origins = [o.strip() for o in _cors_origins_env.split(",") if o.strip()]
+else:
+    _allowed_origins = [
+        "http://localhost:8000", "http://127.0.0.1:8000",
+        "http://localhost:5500", "http://127.0.0.1:5500",
+    ]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=_allowed_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -45,8 +60,19 @@ def read_root():
 def get_stations():
     """Fetch global air quality stations from real OpenAQ v3 data.
     (v1/v2 were retired Jan 2025 and return HTTP 410 — this endpoint was
-    silently broken until migrated to v3, which requires OPENAQ_API_KEY.)"""
+    silently broken until migrated to v3, which requires OPENAQ_API_KEY.)
+    NOTE: metadata only — does NOT include each station's live reading.
+    See /stations-with-readings for that."""
     return openaq_client.get_stations(limit=1000)
+
+@app.get("/stations-with-readings")
+def get_stations_with_readings():
+    """Real stations WITH each one's actual latest PM2.5 reading resolved
+    server-side. Use this (not /stations) for anything that needs to color
+    or filter by real air quality — OpenAQ v3's plain /locations list does
+    not include live readings inline, which is exactly the bug this
+    endpoint fixes for the Air Quality layer toggle."""
+    return openaq_client.get_stations_with_readings()
 
 @app.get("/country-boundaries")
 def country_boundaries():
@@ -96,10 +122,15 @@ def shi_global():
 
     aggregate = openaq_client.get_country_aqi_aggregate()
     if not aggregate:
+        reason = openaq_client.get_last_openaq_error()
+        message = "Could not fetch real OpenAQ data right now. Try again shortly."
+        if reason:
+            message += f" (reason: {reason})"
         return {
             "countries": [],
             "status": "no_data",
-            "message": "Could not fetch real OpenAQ data right now. Try again shortly."
+            "message": message,
+            "debug_reason": reason
         }
 
     results = []
@@ -240,6 +271,19 @@ def get_climate(lat: float = Query(None), lon: float = Query(None)):
     if lat is not None and lon is not None:
         return climate.get_location_climate(lat, lon)
     return climate.get_climate_geojson()
+
+@app.get("/rainfall")
+def get_rainfall():
+    """Global real-time precipitation grid (GeoJSON) — real current
+    readings from Open-Meteo, same underlying fetch as /climate's
+    temperature grid."""
+    return climate.get_rainfall_geojson()
+
+@app.get("/weather-conditions")
+def get_weather_conditions():
+    """Global real-time cloud cover grid (GeoJSON) — real current readings
+    from Open-Meteo, same underlying fetch as /climate and /rainfall."""
+    return climate.get_weather_conditions_geojson()
 
 @app.get("/environment")
 def get_environment(lat: float = Query(...), lon: float = Query(...)):

@@ -2,7 +2,17 @@ class ApiService {
     async get(endpoint, params = {}) {
         try {
             const url = new URL(`${CONFIG.API_BASE_URL}${endpoint}`);
-            Object.keys(params).forEach(key => url.searchParams.append(key, params[key]));
+            // Only append params that actually have a value — passing
+            // undefined/null through here used to become the literal string
+            // "undefined" in the query string (e.g. /climate?lat=undefined),
+            // which fails FastAPI's type validation and silently returns
+            // nothing to the caller.
+            Object.keys(params).forEach(key => {
+                const value = params[key];
+                if (value !== undefined && value !== null) {
+                    url.searchParams.append(key, value);
+                }
+            });
             
             const response = await fetch(url);
             if (!response.ok) {
@@ -54,6 +64,18 @@ class ApiService {
 
     async getStations() {
         return this.get('/stations');
+    }
+
+    async getRainfall() {
+        return this.get('/rainfall');
+    }
+
+    async getWeatherConditions() {
+        return this.get('/weather-conditions');
+    }
+
+    async getStationsWithReadings() {
+        return this.get('/stations-with-readings');
     }
 
     async getShiGlobal() {

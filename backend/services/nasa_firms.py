@@ -48,16 +48,18 @@ def get_wildfires_geojson() -> Dict[str, Any]:
             logger.warning("No wildfire data found in FIRMS response")
             return {"type": "FeatureCollection", "features": [], "metadata": {"status": "empty"}}
             
-        # Parse and sort by frp (Fire Radiative Power) descending
-        def get_frp_value(row):
-            try:
-                return float(row.get('frp', 0))
-            except (ValueError, TypeError):
-                return 0.0
-                
-        # Sort by FRP descending to prioritize intense fires
-        rows.sort(key=get_frp_value, reverse=True)
-        top_rows = rows[:MAX_FEATURES]
+        # Take an evenly-spaced sample across ALL detections rather than the
+        # most intense ones only. Sorting by FRP descending and keeping the
+        # top 500 guaranteed every displayed fire cleared the "severe"
+        # threshold — the map showed only red dots, not because red is wrong,
+        # but because low/medium-intensity fires (the majority of real
+        # detections) were being discarded before they ever reached the
+        # frontend. An evenly-spaced sample preserves the true intensity mix.
+        if len(rows) > MAX_FEATURES:
+            step = len(rows) / MAX_FEATURES
+            top_rows = [rows[int(i * step)] for i in range(MAX_FEATURES)]
+        else:
+            top_rows = rows
         
         features = []
         for row in top_rows:

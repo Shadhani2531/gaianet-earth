@@ -19,7 +19,7 @@
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
 
     <!-- Custom CSS -->
-    <link rel="stylesheet" href="css/style.css">
+    <link rel="stylesheet" href="css/style.css?v=2">
 </head>
 <body>
 
@@ -41,7 +41,7 @@
 
     <!-- Floating Top Controller -->
     <div class="floating-controller glass-panel shimmer-edge">
-        <i class="fa-solid fa-magnifying-glass"></i>
+        <i id="search-trigger" class="fa-solid fa-magnifying-glass"></i>
         <input type="text" class="search-input" placeholder="Search Location or Simulation Scenario...">
         <button id="scenario-btn" class="btn primary-btn"><i class="fa-solid fa-flask"></i> LAB</button>
     </div>
@@ -50,6 +50,12 @@
     <div id="neural-overlay" class="neural-overlay hidden">
         <div class="scan-title">NEURAL SCAN: <span id="scan-location">GLOBAL</span></div>
         <div class="scan-status flicker"><i class="fa-solid fa-sync"></i> Syncing Ground Truth...</div>
+    </div>
+
+    <!-- Lightweight notice for degraded/no-data layer states -->
+    <div id="gn-toast" class="gn-toast">
+        <i class="fa-solid fa-triangle-exclamation"></i>
+        <span id="gn-toast-message"></span>
     </div>
 
     <!-- Spatial Tab Dock -->
@@ -66,9 +72,6 @@
         <div class="tab-item" data-tab="prediction" title="Forecast Lab">
             <i class="fa-solid fa-brain"></i>
         </div>
-        <div class="tab-item" data-tab="simulator" title="Simulator Controls">
-            <i class="fa-solid fa-sliders"></i>
-        </div>
         <div class="tab-item" data-tab="reports" title="Community Reports">
             <i class="fa-solid fa-bullhorn"></i>
         </div>
@@ -81,8 +84,13 @@
     <main class="dashboard-container">
         
         <!-- Left Panel: Layers -->
-        <aside class="panel left-panel glass-panel">
-            <h2><i class="fa-solid fa-layer-group"></i> Environmental Layers</h2>
+        <aside id="left-panel" class="panel left-panel glass-panel collapsed">
+            <div class="panel-header-row">
+                <h2><i class="fa-solid fa-layer-group"></i> <span>Environmental Layers</span></h2>
+                <button id="left-panel-collapse" class="panel-collapse-btn" title="Expand panel" aria-label="Expand panel">
+                    <i class="fa-solid fa-chevron-right"></i>
+                </button>
+            </div>
             
             <div class="layer-group">
                 <h3>Environmental Intelligence</h3>
@@ -102,30 +110,36 @@
                     <span class="label-text"><i class="fa-solid fa-fire-flame-curved"></i> Active Wildfires</span>
                 </label>
                 <label class="toggle-switch">
-                    <input type="checkbox" id="layer-satellite">
+                    <input type="checkbox" id="layer-rainfall">
                     <span class="slider"></span>
-                    <span class="label-text"><i class="fa-solid fa-satellite"></i> Satellite View (NASA GIBS)</span>
+                    <span class="label-text"><i class="fa-solid fa-cloud-rain"></i> Rainfall (Precipitation)</span>
+                </label>
+                <label class="toggle-switch">
+                    <input type="checkbox" id="layer-weather">
+                    <span class="slider"></span>
+                    <span class="label-text"><i class="fa-solid fa-cloud"></i> Weather Conditions</span>
                 </label>
                 <label class="toggle-switch">
                     <input type="checkbox" id="layer-sensors">
                     <span class="slider"></span>
                     <span class="label-text"><i class="fa-solid fa-tower-broadcast"></i> Global Air Quality (OpenAQ)</span>
                 </label>
-                <label class="toggle-switch">
-                    <input type="checkbox" id="layer-shi">
-                    <span class="slider"></span>
-                    <span class="label-text"><i class="fa-solid fa-heart-pulse"></i> India Live SHI Tracking</span>
-                </label>
             </div>
             
-            <div id="layer-legend" class="legend-container">
-                <!-- Dynamically populated -->
+            <div id="layer-legend" class="legend-container hidden">
+                <!-- Dynamically populated based on active layers -->
             </div>
 
             <div id="prediction-panel" class="prediction-panel hidden">
                 <div class="prediction-panel-header">
-                    <h3><i class="fa-solid fa-flask-vial"></i> What-If Simulator</h3>
-                    <p class="prediction-panel-sub">Adjust real environmental pressures for this location and see the projected effect — grounded in cited climate science, not a black box.</p>
+                    <h3>
+                        <i class="fa-solid fa-flask-vial"></i> What-If Simulator
+                        <span class="info-icon-wrap">
+                            <i class="fa-solid fa-circle-info info-icon"></i>
+                            <span class="info-icon-tooltip">Grounded in cited climate science, not a black box — every projection here traces back to a real published source.</span>
+                        </span>
+                    </h3>
+                    <p class="prediction-panel-sub">Adjust real environmental pressures for this location and see the projected effect.</p>
                 </div>
 
                 <div class="prediction-location" id="prediction-location">
@@ -177,12 +191,14 @@
 
                     <p class="prediction-narrative" id="prediction-narrative"></p>
 
-                    <div id="prediction-changes" class="prediction-changes">
-                        <!-- Populated dynamically: one row per metric change, each with a
-                             confidence badge (measured / estimated / modeled) -->
-                    </div>
-
-                    <p class="prediction-data-note" id="prediction-data-note"></p>
+                    <details class="prediction-science-details">
+                        <summary>See the science behind this</summary>
+                        <div id="prediction-changes" class="prediction-changes">
+                            <!-- Populated dynamically: one row per metric change, each with a
+                                 confidence badge (measured / estimated / modeled) -->
+                        </div>
+                        <p class="prediction-data-note" id="prediction-data-note"></p>
+                    </details>
                 </div>
             </div>
 
@@ -261,8 +277,13 @@
         </div>
 
         <!-- Right Panel: Analytics -->
-        <aside class="panel right-panel glass-panel">
-            <h2><i class="fa-solid fa-chart-line"></i> Intelligence Platform</h2>
+        <aside id="right-panel" class="panel right-panel glass-panel collapsed">
+            <div class="panel-header-row">
+                <h2><i class="fa-solid fa-chart-line"></i> <span>Intelligence Platform</span></h2>
+                <button id="right-panel-collapse" class="panel-collapse-btn" title="Expand panel" aria-label="Expand panel">
+                    <i class="fa-solid fa-chevron-left"></i>
+                </button>
+            </div>
             
             <!-- SHI Gauge (Phase 3 Spatial Design) -->
             <div class="shi-gauge-container">
@@ -315,8 +336,14 @@
 
         <!-- Screen 7: Global SHI Heatmap -->
         <aside id="global-shi-panel" class="panel right-panel glass-panel hidden">
-            <h2><i class="fa-solid fa-globe"></i> Global Health Index</h2>
-            <p class="global-shi-sub">Country-level Sustainability Health Index, computed live from real OpenAQ air-quality stations. Countries with no data are left unshaded, never guessed.</p>
+            <h2>
+                <i class="fa-solid fa-globe"></i> Global Health Index
+                <span class="info-icon-wrap">
+                    <i class="fa-solid fa-circle-info info-icon"></i>
+                    <span class="info-icon-tooltip">Computed live from real OpenAQ air-quality stations. Countries with no data are left unshaded, never guessed.</span>
+                </span>
+            </h2>
+            <p class="global-shi-sub">Country-level Sustainability Health Index.</p>
 
             <div id="global-shi-status" class="global-shi-status hidden"></div>
 
@@ -340,10 +367,30 @@
     <!-- Curated timelapse starting points -->
     <div id="timelapse-presets" class="timelapse-presets glass-panel hidden">
         <span class="timelapse-presets-label">Notable changes:</span>
-        <button class="preset-chip" data-lat="-3.4653" data-lon="-62.2159" data-height="1200000" data-name="Amazon Rainforest, Brazil">Amazon deforestation</button>
-        <button class="preset-chip" data-lat="45.0" data-lon="60.0" data-height="900000" data-name="Aral Sea, Kazakhstan/Uzbekistan">Aral Sea shrinking</button>
-        <button class="preset-chip" data-lat="25.0762" data-lon="55.1302" data-height="500000" data-name="Dubai, UAE">Dubai urban growth</button>
-        <button class="preset-chip" data-lat="64.1836" data-lon="-51.7214" data-height="700000" data-name="Greenland Ice Sheet">Greenland ice retreat</button>
+        <button class="preset-chip" data-lat="-3.4653" data-lon="-62.2159" data-height="1200000" data-name="Amazon Rainforest, Brazil"
+            data-before-date="2000-08-01" data-after-date="2024-08-01" data-stat-type="live-ndvi">Amazon deforestation</button>
+        <button class="preset-chip" data-lat="45.0" data-lon="60.0" data-height="900000" data-name="Aral Sea, Kazakhstan/Uzbekistan"
+            data-before-date="2000-08-01" data-after-date="2024-08-01" data-stat-type="cited"
+            data-cited-text="Lost approximately 90% of its water volume since 1960" data-cited-source="NASA JPL / Micklin, Lakes &amp; Reservoirs: Research &amp; Management (2010)">Aral Sea shrinking</button>
+        <button class="preset-chip" data-lat="25.0762" data-lon="55.1302" data-height="500000" data-name="Dubai, UAE"
+            data-before-date="2000-08-01" data-after-date="2024-08-01" data-stat-type="cited"
+            data-cited-text="Built-up urban area grew roughly 18-fold between 1975 and 2015 (~54 km² to ~977 km²)" data-cited-source="Published geospatial land-cover study, Dubai Municipality data">Dubai urban growth</button>
+        <button class="preset-chip" data-lat="64.1836" data-lon="-51.7214" data-height="700000" data-name="Greenland Ice Sheet"
+            data-before-date="2000-08-01" data-after-date="2024-08-01" data-stat-type="cited"
+            data-cited-text="Losing approximately 270 billion tonnes of ice per year on average since 2002" data-cited-source="NASA GRACE / GRACE-FO satellites">Greenland ice retreat</button>
+    </div>
+
+    <!-- Guided-tour story readout: shown when a preset chip activates the local view -->
+    <div id="story-readout" class="story-readout glass-panel hidden">
+        <div class="story-readout-header">
+            <span id="story-readout-title"></span>
+            <button id="story-readout-close" class="icon-btn small-icon-btn" aria-label="Close"><i class="fa-solid fa-xmark"></i></button>
+        </div>
+        <div class="story-readout-number" id="story-readout-number">--</div>
+        <div class="story-readout-basis">
+            <span class="confidence-badge" id="story-readout-badge"></span>
+            <span id="story-readout-source"></span>
+        </div>
     </div>
 
     <footer class="bottom-panel glass-panel shimmer-edge">
@@ -362,7 +409,7 @@
                 </div>
                 
                 <div id="comparison-slider-node" class="slider-node hidden">
-                    <span class="slider-label">HISTORICAL [1984]</span>
+                    <span class="slider-label">HISTORICAL [2000]</span>
                     <input type="range" id="comparison-slider" min="0" max="100" value="0" class="timeline-slider">
                 </div>
             </div>
@@ -445,11 +492,12 @@
 
     <!-- Scripts -->
     <script src="js/config.js"></script>
+    <script src="js/state.js"></script>
     <script src="js/api.js"></script>
-    <script src="js/ui.js?v=2"></script>
+    <script src="js/ui.js?v=4"></script>
     <script src="js/simulation.js"></script>
     <script src="js/weather.js"></script>
-    <script src="js/globe.js?v=2"></script>
+    <script src="js/globe.js?v=4"></script>
     <script src="js/main.js"></script>
 </body>
 </html>
