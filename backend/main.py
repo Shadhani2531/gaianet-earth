@@ -16,7 +16,7 @@ if curr_dir not in sys.path:
 # environment variables at import time.
 load_dotenv(os.path.join(curr_dir, ".env"))
 
-from services import nasa_firms, modis_ndvi, climate, mock_data, weather, scenario_engine, openaq_client, country_coords
+from services import nasa_firms, modis_ndvi, climate, mock_data, weather, scenario_engine, openaq_client, country_coords, alerts, forecast, wildfire_risk, gaia_agent, impact_report
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -408,6 +408,17 @@ class ReportCreate(BaseModel):
     reporter_name: str = "Anonymous"
     reporter_email: str | None = None
 
+
+class GaiaChatMessage(BaseModel):
+    role: str  # "user" | "assistant"
+    content: str
+
+
+class GaiaChatRequest(BaseModel):
+    message: str
+    history: list[GaiaChatMessage] = []
+    context: dict | None = None  # {"lat": ..., "lon": ...} — currently selected map location, if any
+
 @app.post("/api/reports")
 def create_report(report: ReportCreate, db: Session = Depends(get_db)):
     """Saves a user-submitted environmental incident report, cross-checked
@@ -439,6 +450,91 @@ async def get_weather(lat: float, lon: float):
 def get_reports(db: Session = Depends(get_db)):
     """Returns all citizen science reports."""
     return db.query(DBReport).all()
+
+# --- Planetary Health OS browser extension ---
+@app.get("/alerts/summary")
+def get_alerts_summary(
+    lat: float = Query(..., ge=-90, le=90),
+    lon: float = Query(..., ge=-180, le=180),
+    radius_km: float = Query(50.0, gt=0, le=500),
+):
+    """
+    Small-payload alert summary for the browser extension's MV3 service
+    worker (see extension/background.js). Deliberately returns only a
+    handful of numbers — reuses the existing cached FIRMS/OpenAQ clients
+    rather than adding new upstream calls, so this endpoint's cost is
+    just distance filtering over data the main map endpoints already
+    fetch and cache.
+    """
+    return alerts.get_alert_summary(lat, lon, radius_km)
+
+
+# --- Predictive AI (Phase 2) ---
+@app.get("/forecast/weather")
+def get_weather_forecast(
+    lat: float = Query(..., ge=-90, le=90),
+    lon: float = Query(..., ge=-180, le=180),
+    days: int = Query(7, ge=1, le=16),
+):
+    """Real multi-day weather forecast (Open-Meteo NWP model output —
+    see backend/services/forecast.py for why this isn't a from-scratch
+    trained time-series model)."""
+    return forecast.get_weather_forecast(lat, lon, days)
+
+
+@app.get("/forecast/air-quality")
+def get_air_quality_forecast(
+    lat: float = Query(..., ge=-90, le=90),
+    lon: float = Query(..., ge=-180, le=180),
+    days: int = Query(5, ge=1, le=5),
+):
+    """Real multi-day AQI/PM2.5 forecast (Open-Meteo air quality model)."""
+    return forecast.get_air_quality_forecast(lat, lon, days)
+
+
+@app.get("/wildfire-risk")
+def get_wildfire_risk(
+    lat: float = Query(..., ge=-90, le=90),
+    lon: float = Query(..., ge=-180, le=180),
+):
+    """Transparent, rule-based fire danger index from real temp/humidity/
+    wind/NDVI — see backend/services/wildfire_risk.py's module docstring
+    for why this is formula-based rather than a trained ML classifier."""
+    return wildfire_risk.get_wildfire_risk(lat, lon)
+
+
+# --- Ask Gaia (Phase 3): grounded chat assistant ---
+@app.post("/gaia/chat")
+def gaia_chat(request: GaiaChatRequest):
+    """See backend/services/gaia_agent.py — answers via function-calling
+    against this backend's own real endpoints, never a guessed number.
+    Stateless: the frontend resends recent conversation history each turn."""
+    history = [{"role": m.role, "content": m.content} for m in request.history]
+    return gaia_agent.chat(request.message, history=history, context=request.context)
+
+
+@app.get("/reports/impact")
+def get_impact_report(
+    lat: float = Query(..., ge=-90, le=90),
+    lon: float = Query(..., ge=-180, le=180),
+    radius_km: float = Query(50.0, gt=0, le=500),
+    db: Session = Depends(get_db),
+):
+    """One-click Impact Report — see backend/services/impact_report.py.
+    Nearby citizen reports are queried here (not in the service module)
+    since that's the one part of this feature that needs DB access,
+    matching where all other DB queries already live in this file."""
+    all_reports = db.query(DBReport).all()
+    nearby = [
+        {
+            "id": r.id, "incident_type": r.incident_type, "severity": r.severity,
+            "description": r.description, "timestamp": r.timestamp.isoformat() if r.timestamp else None,
+            "satellite_confirmed": bool(r.satellite_confirmed),
+        }
+        for r in all_reports
+        if alerts._haversine_km(lat, lon, r.lat, r.lon) <= radius_km
+    ]
+    return impact_report.generate_impact_report(lat, lon, nearby_reports=nearby, radius_km=radius_km)
 
 # Mount frontend static files
 # BASE_DIR is the root project folder

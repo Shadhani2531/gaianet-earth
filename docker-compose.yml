@@ -1,8 +1,29 @@
-version: '3.8'
+# GaiaNet Earth — single-service compose file.
+#
+# Previously this defined a standalone postgis/postgis service that
+# nothing in the codebase ever connected to (backend/database.py uses
+# SQLite exclusively via SQLALCHEMY_DATABASE_URL — see that file). That
+# was dead, misleading config: running `docker-compose up` gave you a
+# Postgres container the app never talks to, with a hardcoded weak
+# password, while the actual app+DB was still unstarted.
+#
+# This now reflects what actually exists: one FastAPI service (which
+# also serves the static frontend, see main.py's StaticFiles mount) with
+# its SQLite reports.db persisted via a volume. Real API keys go in
+# backend/.env (see backend/.env.example) — never in this file.
 services:
-  db:
-    image: postgis/postgis:15-3.4
-    environment:
-      POSTGRES_PASSWORD: earth123
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
     ports:
-      - "5432:5432"
+      - "8000:8000"
+    volumes:
+      # Whole repo, not just backend/: main.py serves the frontend
+      # (index.html/js/css) from the repo root — see BASE_DIR in main.py.
+      # This also means reports.db (SQLite, created in backend/) persists
+      # on the host automatically via this same bind mount — no separate
+      # volume needed.
+      - .:/app
+    env_file:
+      - backend/.env

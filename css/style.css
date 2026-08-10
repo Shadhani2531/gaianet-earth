@@ -993,6 +993,76 @@ input:checked ~ .label-text i {
     color: var(--accent-color);
 }
 
+/* Used in 13+ places across index.html/ui.js as className="text-secondary
+   small" but never actually defined — meant every "hint" line (empty
+   states, forecast notes, panel captions) was silently rendering as
+   full-size, full-brightness text instead of a muted caption. */
+.text-secondary {
+    color: var(--text-secondary);
+}
+
+.small {
+    font-size: 0.8rem;
+}
+
+/* --- Predictive AI (Phase 2): forecast strip + AQI forecast --- */
+.forecast-section {
+    margin-top: 18px;
+}
+
+.section-subtitle {
+    font-size: 0.85rem;
+    color: var(--text-secondary);
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    margin: 0 0 10px 0;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.forecast-strip {
+    display: flex;
+    gap: 8px;
+    overflow-x: auto;
+    padding-bottom: 4px;
+}
+
+.forecast-day {
+    flex: 0 0 auto;
+    min-width: 62px;
+    background: rgba(0, 0, 0, 0.2);
+    border: 1px solid var(--panel-border);
+    border-radius: 8px;
+    padding: 10px 6px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 4px;
+}
+
+.forecast-day-label {
+    font-size: 0.7rem;
+    color: var(--text-secondary);
+    text-transform: uppercase;
+}
+
+.forecast-day-icon {
+    font-size: 1rem;
+    color: var(--accent-color);
+}
+
+.forecast-day-temp {
+    font-size: 0.8rem;
+    font-weight: 600;
+    white-space: nowrap;
+}
+
+.forecast-day-precip {
+    font-size: 0.7rem;
+    color: var(--text-secondary);
+}
+
 .location-summary {
     padding: 15px;
     background: rgba(56, 189, 248, 0.05);
@@ -2081,4 +2151,227 @@ input[type="range"].timeline-slider::-webkit-slider-thumb:hover {
     padding: 10px;
     background: rgba(255, 255, 255, 0.03);
     border-radius: 8px;
+}
+
+/* --- Ask Gaia (Phase 3): floating button + chat panel --- */
+.gaia-toggle-btn {
+    position: fixed;
+    bottom: 24px;
+    right: 24px;
+    width: 56px;
+    height: 56px;
+    border-radius: 50%;
+    background: var(--accent-color);
+    color: #04121a;
+    border: none;
+    font-size: 1.4rem;
+    cursor: pointer;
+    box-shadow: 0 8px 24px rgba(0, 255, 194, 0.35);
+    z-index: 900;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: transform 0.2s ease;
+}
+
+.gaia-toggle-btn:hover {
+    transform: scale(1.08);
+}
+
+.gaia-panel {
+    position: fixed;
+    bottom: 92px;
+    right: 24px;
+    width: 340px;
+    max-width: calc(100vw - 32px);
+    height: 460px;
+    max-height: calc(100vh - 140px);
+    display: flex;
+    flex-direction: column;
+    z-index: 900;
+    padding: 16px;
+}
+
+.gaia-panel.hidden {
+    display: none;
+}
+
+.gaia-panel-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    position: relative;
+    padding-right: 24px;
+}
+
+.gaia-panel-header h3 {
+    margin: 0;
+    font-size: 1rem;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.gaia-panel-sub {
+    margin: 6px 0 12px 0;
+}
+
+.gaia-messages {
+    flex: 1;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding-right: 4px;
+    margin-bottom: 10px;
+}
+
+.gaia-message {
+    max-width: 85%;
+    padding: 8px 12px;
+    border-radius: 12px;
+    font-size: 0.85rem;
+    line-height: 1.4;
+    white-space: pre-wrap;
+}
+
+.gaia-message-user {
+    align-self: flex-end;
+    background: var(--accent-color);
+    color: #04121a;
+    border-bottom-right-radius: 4px;
+}
+
+.gaia-message-assistant {
+    align-self: flex-start;
+    background: rgba(255, 255, 255, 0.06);
+    border: 1px solid var(--panel-border);
+    border-bottom-left-radius: 4px;
+}
+
+.gaia-message-error {
+    border-color: var(--danger);
+    color: var(--danger);
+}
+
+.gaia-typing {
+    display: flex;
+    gap: 4px;
+    align-items: center;
+    padding: 12px;
+}
+
+.gaia-typing span {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--text-secondary);
+    animation: gaia-typing-bounce 1.2s infinite ease-in-out;
+}
+
+.gaia-typing span:nth-child(2) { animation-delay: 0.15s; }
+.gaia-typing span:nth-child(3) { animation-delay: 0.3s; }
+
+@keyframes gaia-typing-bounce {
+    0%, 60%, 100% { transform: translateY(0); opacity: 0.5; }
+    30% { transform: translateY(-4px); opacity: 1; }
+}
+
+.gaia-input-form {
+    display: flex;
+    gap: 8px;
+}
+
+.gaia-input-form input {
+    flex: 1;
+    background: rgba(0, 0, 0, 0.3);
+    border: 1px solid var(--panel-border);
+    border-radius: 20px;
+    padding: 8px 14px;
+    color: var(--text-primary, #e2e8f0);
+    font-size: 0.85rem;
+}
+
+.gaia-input-form input:focus {
+    outline: none;
+    border-color: var(--accent-color);
+}
+
+.gaia-input-form button {
+    width: 36px;
+    height: 36px;
+    border-radius: 50%;
+    border: none;
+    background: var(--accent-color);
+    color: #04121a;
+    cursor: pointer;
+    flex-shrink: 0;
+}
+
+@media (max-width: 480px) {
+    .gaia-panel {
+        right: 16px;
+        bottom: 84px;
+        width: calc(100vw - 32px);
+    }
+    .gaia-toggle-btn {
+        right: 16px;
+        bottom: 16px;
+    }
+}
+
+.gaia-suggestions {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin-top: 4px;
+}
+
+.gaia-suggestion-chip {
+    text-align: left;
+    background: rgba(255, 255, 255, 0.04);
+    border: 1px solid var(--panel-border);
+    border-radius: 10px;
+    padding: 8px 12px;
+    color: var(--text-secondary);
+    font-size: 0.8rem;
+    cursor: pointer;
+    transition: border-color 0.15s ease, color 0.15s ease;
+}
+
+.gaia-suggestion-chip:hover {
+    border-color: var(--accent-color);
+    color: var(--accent-color);
+}
+
+.gaia-bullet {
+    display: block;
+    margin-top: 2px;
+}
+
+.generate-report-btn {
+    width: 100%;
+    margin-top: 18px;
+    padding: 12px;
+    background: var(--accent-color);
+    color: #04121a;
+    border: none;
+    border-radius: 10px;
+    font-size: 0.9rem;
+    font-weight: 600;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    transition: transform 0.15s ease;
+}
+
+.generate-report-btn:hover:not(:disabled) {
+    transform: translateY(-1px);
+}
+
+.generate-report-btn:disabled {
+    opacity: 0.7;
+    cursor: default;
 }

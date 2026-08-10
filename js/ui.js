@@ -3,6 +3,7 @@ class UIManager {
         this.tempChart = null;
         this.precipChart = null;
         this.insightChart = null;
+        this.aqiForecastChart = null;
 
         this.initEventListeners();
         this.initCharts();
@@ -975,6 +976,158 @@ class UIManager {
                 }
             }
         });
+
+        // AQI forecast — bar chart so each day's peak reads as a distinct
+        // event, and colored per-bar against the same AQI thresholds used
+        // by the sensor dots on the globe and the extension's alert
+        // threshold, so "what counts as bad" looks the same everywhere.
+        const ctxAqiForecast = document.getElementById('aqiForecastChart').getContext('2d');
+        this.aqiForecastChart = new Chart(ctxAqiForecast, {
+            type: 'bar',
+            data: {
+                labels: [],
+                datasets: [{
+                    label: 'Forecast AQI (daily peak)',
+                    data: [],
+                    backgroundColor: [],
+                    borderRadius: 4,
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: {
+                    legend: { display: false },
+                    tooltip: {
+                        callbacks: {
+                            label: (ctx) => `AQI ${ctx.parsed.y ?? 'n/a'}`
+                        }
+                    }
+                },
+                scales: {
+                    y: { display: false, beginAtZero: true },
+                    x: { grid: { display: false } }
+                }
+            }
+        });
+    }
+
+    // AQI color scale shared with the sensor dots on the globe and the
+    // browser extension's AQI_ALERT_THRESHOLD (200) — kept in one place
+    // here so the forecast bars, if that scale ever changes, are easy to
+    // update alongside it rather than silently drifting out of sync.
+    _aqiColor(aqi) {
+        if (aqi === null || aqi === undefined) return 'rgba(148,163,184,0.5)'; // unknown - grey
+        if (aqi <= 50) return '#22c55e';   // Good
+        if (aqi <= 100) return '#eab308';  // Moderate
+        if (aqi <= 150) return '#f97316';  // Unhealthy (sensitive)
+        if (aqi <= 200) return '#ef4444';  // Unhealthy
+        if (aqi <= 300) return '#a855f7';  // Very unhealthy
+        return '#7f1d1d';                  // Hazardous
+    }
+
+    updateForecastPanels(forecastData, aqiForecastData, wildfireRiskData) {
+        this._updateWeatherForecastStrip(forecastData);
+        this._updateAqiForecastChart(aqiForecastData);
+        this._updateWildfireRiskStat(wildfireRiskData);
+    }
+
+    _updateWeatherForecastStrip(forecastData) {
+        const strip = document.getElementById('forecast-strip');
+        if (!strip) return;
+
+        if (!forecastData || !forecastData.days || forecastData.days.length === 0) {
+            strip.innerHTML = `<p class="text-secondary small">Forecast unavailable right now — the backend couldn't reach Open-Meteo. Try again shortly.</p>`;
+            return;
+        }
+
+        const iconFor = (precipMm) => {
+            if (precipMm >= 10) return 'fa-cloud-showers-heavy';
+            if (precipMm >= 1) return 'fa-cloud-rain';
+            return 'fa-sun';
+        };
+
+        strip.innerHTML = forecastData.days.map(day => {
+            const date = new Date(day.date + 'T00:00:00');
+            const label = date.toLocaleDateString('default', { weekday: 'short' });
+            const precip = day.precipitation_mm ?? 0;
+            return `
+                <div class="forecast-day" title="${day.date}">
+                    <span class="forecast-day-label">${label}</span>
+                    <i class="fa-solid ${iconFor(precip)} forecast-day-icon"></i>
+                    <span class="forecast-day-temp">${day.temp_max_c ?? '--'}° / ${day.temp_min_c ?? '--'}°</span>
+                    <span class="forecast-day-precip">${precip}mm</span>
+                </div>
+            `;
+        }).join('');
+    }
+
+    _updateAqiForecastChart(aqiForecastData) {
+        const note = document.getElementById('aqi-forecast-note');
+        if (!this.aqiForecastChart) return;
+
+        if (!aqiForecastData || !aqiForecastData.days || aqiForecastData.days.length === 0) {
+            this.aqiForecastChart.data.labels = [];
+            this.aqiForecastChart.data.datasets[0].data = [];
+            this.aqiForecastChart.data.datasets[0].backgroundColor = [];
+            this.aqiForecastChart.update();
+            if (note) note.textContent = 'Forecast unavailable right now — try again shortly.';
+            return;
+        }
+
+        const labels = aqiForecastData.days.map(d => {
+            const date = new Date(d.date + 'T00:00:00');
+            return date.toLocaleDateString('default', { weekday: 'short' });
+        });
+        const values = aqiForecastData.days.map(d => d.aqi_max);
+        const colors = values.map(v => this._aqiColor(v));
+
+        this.aqiForecastChart.data.labels = labels;
+        this.aqiForecastChart.data.datasets[0].data = values;
+        this.aqiForecastChart.data.datasets[0].backgroundColor = colors;
+        this.aqiForecastChart.update();
+
+        if (note) {
+            const worst = values.filter(v => v !== null && v !== undefined);
+            note.textContent = worst.length
+                ? `Peak forecast AQI this period: ${Math.max(...worst)}.`
+                : '';
+        }
+    }
+
+    _updateWildfireRiskStat(wildfireRiskData) {
+        const valueEl = document.getElementById('stat-risk');
+        const detailEl = document.getElementById('stat-risk-detail');
+        if (!valueEl) return;
+
+        if (!wildfireRiskData || wildfireRiskData.score === null || wildfireRiskData.score === undefined) {
+            valueEl.textContent = '--';
+            valueEl.style.color = '';
+            if (detailEl) detailEl.textContent = '';
+            return;
+        }
+
+        valueEl.textContent = `${wildfireRiskData.score} (${wildfireRiskData.category})`;
+
+        const colorByCategory = {
+            'Low': 'var(--success)',
+            'Moderate': 'var(--warning-amber)',
+            'High': '#f97316',
+            'Extreme': 'var(--danger)',
+        };
+        valueEl.style.color = colorByCategory[wildfireRiskData.category] || '';
+
+        if (detailEl) {
+            const inputs = wildfireRiskData.inputs || {};
+            const parts = [];
+            if (inputs.temp_c !== null && inputs.temp_c !== undefined) parts.push(`${inputs.temp_c}°C`);
+            if (inputs.humidity_pct !== null && inputs.humidity_pct !== undefined) parts.push(`${inputs.humidity_pct}% humidity`);
+            if (inputs.wind_kmh !== null && inputs.wind_kmh !== undefined) parts.push(`${inputs.wind_kmh}km/h wind`);
+            if (inputs.ndvi !== null && inputs.ndvi !== undefined) parts.push(`NDVI ${inputs.ndvi}`);
+            detailEl.textContent = parts.length
+                ? `Rule-based index from: ${parts.join(', ')}`
+                : '';
+        }
     }
 
     updateAnalyticsPanel(climateData, envData, shiData, ndviData) {

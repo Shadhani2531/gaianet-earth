@@ -19,7 +19,7 @@
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
 
     <!-- Custom CSS -->
-    <link rel="stylesheet" href="css/style.css?v=2">
+    <link rel="stylesheet" href="css/style.css?v=6">
 </head>
 <body>
 
@@ -66,9 +66,13 @@
         <div class="tab-item" data-tab="insight" title="Climate Insight">
             <i class="fa-solid fa-satellite"></i>
         </div>
-        <div class="tab-item" data-tab="temporal" title="Historical Timeline">
-            <i class="fa-solid fa-clock-rotate-left"></i>
-        </div>
+        <!-- "Historical Timeline" (data-tab="temporal") removed from
+             navigation — it was glitching (satellite imagery layer state
+             not settling correctly on tab entry) and needs a proper
+             rebuild rather than a patch. The panel markup and its logic
+             in js/ui.js (case 'temporal':) are left in place, untouched,
+             so that rebuild has something real to start from instead of
+             starting over from nothing. -->
         <div class="tab-item" data-tab="prediction" title="Forecast Lab">
             <i class="fa-solid fa-brain"></i>
         </div>
@@ -318,11 +322,34 @@
                     <span class="stat-label">Vegetation (NDVI)</span>
                     <span class="stat-value" id="stat-ndvi">--</span>
                 </div>
-                <div class="stat-card">
+                <div class="stat-card" id="stat-risk-card" title="Rule-based fire danger index (temperature, humidity, wind, vegetation dryness) — not a trained ML model. See stat-risk-detail for the real inputs behind this number.">
                     <span class="stat-label">Fire Risk Index</span>
                     <span class="stat-value" id="stat-risk">--</span>
                 </div>
             </div>
+            <p class="text-secondary small" id="stat-risk-detail" style="margin-top: -6px;"></p>
+
+            <!-- 7-Day Weather Forecast (Predictive AI, Phase 2) -->
+            <div class="forecast-section" id="forecast-section">
+                <h3 class="section-subtitle"><i class="fa-solid fa-calendar-days"></i> 7-Day Forecast</h3>
+                <div class="forecast-strip" id="forecast-strip">
+                    <p class="text-secondary small">Select a location to see the forecast.</p>
+                </div>
+            </div>
+
+            <!-- Air Quality Forecast (Predictive AI, Phase 2) -->
+            <div class="forecast-section" id="aqi-forecast-section">
+                <h3 class="section-subtitle"><i class="fa-solid fa-wind"></i> Air Quality Forecast</h3>
+                <div class="chart-container" style="height: 110px;">
+                    <canvas id="aqiForecastChart"></canvas>
+                </div>
+                <p class="text-secondary small" id="aqi-forecast-note"></p>
+            </div>
+
+            <!-- One-Click Impact Report -->
+            <button id="generate-report-btn" class="generate-report-btn">
+                <i class="fa-solid fa-file-lines"></i> Generate Impact Report
+            </button>
         </aside>
 
         <!-- Screen 6: Community Reports Feed -->
@@ -490,14 +517,50 @@
         </div>
     </div>
 
+    <!-- Ask Gaia (Phase 3): floating button + chat panel, available on
+         every tab (kept outside the tab-visibility system deliberately —
+         same reasoning as the floating search bar). -->
+    <button id="gaia-toggle-btn" class="gaia-toggle-btn" title="Ask Gaia">
+        <i class="fa-solid fa-comment-dots"></i>
+    </button>
+
+    <div id="gaia-panel" class="gaia-panel glass-panel hidden">
+        <div class="gaia-panel-header">
+            <h3>
+                <i class="fa-solid fa-comment-dots"></i> Ask Gaia
+                <span class="info-icon-wrap">
+                    <i class="fa-solid fa-circle-info info-icon"></i>
+                    <span class="info-icon-tooltip">Answers are grounded in this dashboard's real data — Gaia looks numbers up rather than guessing them.</span>
+                </span>
+            </h3>
+            <button id="gaia-close-btn" class="close-btn"><i class="fa-solid fa-times"></i></button>
+        </div>
+        <div id="gaia-messages" class="gaia-messages">
+            <div class="gaia-message gaia-message-assistant">
+                Hi, I'm Gaia. Ask me about conditions, forecasts, or fire risk anywhere.
+            </div>
+            <div class="gaia-suggestions" id="gaia-suggestions">
+                <button type="button" class="gaia-suggestion-chip">AQI forecast for Nagpur this weekend</button>
+                <button type="button" class="gaia-suggestion-chip">Is it safe outside in Delhi today?</button>
+                <button type="button" class="gaia-suggestion-chip">Compare fire risk: Mumbai vs Pune</button>
+            </div>
+        </div>
+        <form id="gaia-input-form" class="gaia-input-form">
+            <input type="text" id="gaia-input" placeholder="Ask Gaia..." autocomplete="off" maxlength="500">
+            <button type="submit" id="gaia-send-btn"><i class="fa-solid fa-paper-plane"></i></button>
+        </form>
+    </div>
+
     <!-- Scripts -->
     <script src="js/config.js"></script>
     <script src="js/state.js"></script>
-    <script src="js/api.js"></script>
-    <script src="js/ui.js?v=4"></script>
+    <script src="js/api.js?v=3"></script>
+    <script src="js/ui.js?v=5"></script>
     <script src="js/simulation.js"></script>
     <script src="js/weather.js"></script>
     <script src="js/globe.js?v=4"></script>
+    <script src="js/gaia.js?v=3"></script>
+    <script src="js/report.js"></script>
     <script src="js/main.js"></script>
 </body>
 </html>

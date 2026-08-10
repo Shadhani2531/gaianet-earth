@@ -1,0 +1,191 @@
+// report.js — "Generate Impact Report" button.
+//
+// Opens a self-contained, print-friendly HTML document in a new tab
+// rather than generating a PDF server-side. Deliberate choice: the
+// browser's own "Print > Save as PDF" already gives a real, downloadable
+// PDF with zero new backend dependency (no reportlab/weasyprint, no new
+// package to install, no new point of failure) — consistent with this
+// project's zero-added-cost, zero-unnecessary-dependency approach
+// throughout. Light-themed deliberately: the dashboard is dark for
+// screen use, but a report meant to be printed/shared/emailed should not
+// waste a print cartridge on a near-black background.
+
+document.addEventListener('DOMContentLoaded', () => {
+    const btn = document.getElementById('generate-report-btn');
+    if (!btn) return;
+
+    btn.addEventListener('click', async () => {
+        const loc = (typeof AppState !== 'undefined') ? AppState.selectedLocation : null;
+        if (!loc) {
+            alert('Select a location on the globe first, then generate a report for it.');
+            return;
+        }
+
+        const originalLabel = btn.innerHTML;
+        btn.disabled = true;
+        btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Generating...';
+
+        const report = await api.getImpactReport(loc.lat, loc.lon, 100);
+
+        btn.disabled = false;
+        btn.innerHTML = originalLabel;
+
+        if (!report) {
+            alert("Couldn't generate the report — check that the backend is running and try again.");
+            return;
+        }
+
+        openReportWindow(report);
+    });
+});
+
+function openReportWindow(report) {
+    const win = window.open('', '_blank');
+    if (!win) {
+        alert('Your browser blocked the report from opening in a new tab — allow popups for this site and try again.');
+        return;
+    }
+    win.document.write(buildReportHtml(report));
+    win.document.close();
+}
+
+function buildReportHtml(r) {
+    const coords = `${r.lat.toFixed(4)}, ${r.lon.toFixed(4)}`;
+    const generated = new Date(r.generated_at).toLocaleString();
+
+    return `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>GaiaNet Environmental Impact Report — ${coords}</title>
+<style>
+    body { font-family: 'Segoe UI', Arial, sans-serif; color: #1a1a1a; max-width: 800px; margin: 40px auto; padding: 0 20px; line-height: 1.5; }
+    h1 { font-size: 1.5rem; margin-bottom: 4px; }
+    .subtitle { color: #666; font-size: 0.9rem; margin-bottom: 24px; }
+    h2 { font-size: 1.1rem; border-bottom: 2px solid #227257; padding-bottom: 4px; margin-top: 28px; }
+    .summary-box { background: #f0f8f4; border-left: 4px solid #227257; padding: 14px 18px; margin: 16px 0; font-size: 0.95rem; }
+    table { width: 100%; border-collapse: collapse; margin-top: 8px; font-size: 0.85rem; }
+    th, td { text-align: left; padding: 6px 10px; border-bottom: 1px solid #ddd; }
+    th { color: #555; font-weight: 600; }
+    .stat-row { display: flex; gap: 24px; margin: 10px 0; flex-wrap: wrap; }
+    .stat { background: #f7f7f7; border-radius: 6px; padding: 10px 16px; min-width: 120px; }
+    .stat-label { display: block; font-size: 0.75rem; color: #666; text-transform: uppercase; }
+    .stat-value { display: block; font-size: 1.3rem; font-weight: 700; color: #227257; }
+    .badge { display: inline-block; padding: 2px 10px; border-radius: 12px; font-size: 0.8rem; font-weight: 600; }
+    .badge-low { background: #dcfce7; color: #166534; }
+    .badge-moderate { background: #fef9c3; color: #854d0e; }
+    .badge-high { background: #ffedd5; color: #9a3412; }
+    .badge-extreme, .badge-unavailable { background: #fee2e2; color: #991b1b; }
+    .unavailable-note { color: #991b1b; font-size: 0.85rem; font-style: italic; }
+    .footer { margin-top: 40px; padding-top: 12px; border-top: 1px solid #ddd; font-size: 0.75rem; color: #888; }
+    .print-btn { position: fixed; top: 20px; right: 20px; background: #227257; color: white; border: none; padding: 10px 18px; border-radius: 20px; font-size: 0.9rem; cursor: pointer; }
+    @media print { .print-btn { display: none; } body { margin: 0; } }
+</style>
+</head>
+<body>
+    <button class="print-btn" onclick="window.print()">Print / Save as PDF</button>
+
+    <h1>Environmental Impact Report</h1>
+    <p class="subtitle">Location: ${coords} · Generated ${generated} · GaiaNet Earth</p>
+
+    <div class="summary-box">${escapeHtml(r.summary || 'No summary available.')}</div>
+
+    <h2>Current Conditions</h2>
+    ${renderCurrentConditions(r.current_conditions)}
+
+    <h2>7-Day Weather Forecast</h2>
+    ${renderWeatherForecast(r.weather_forecast)}
+
+    <h2>Air Quality Forecast</h2>
+    ${renderAqiForecast(r.air_quality_forecast)}
+
+    <h2>Wildfire Risk</h2>
+    ${renderWildfireRisk(r.wildfire_risk)}
+
+    <h2>Nearby Citizen Reports (${r.radius_km}km radius)</h2>
+    ${renderNearbyReports(r.nearby_reports)}
+
+    <div class="footer">
+        Generated by GaiaNet Earth. All figures are real data from live sources (Open-Meteo, OpenAQ, WAQI, MODIS) or
+        clearly labeled fallback estimates where live data was unavailable at generation time — never fabricated.
+        The wildfire risk score is a documented rule-based formula, not a trained ML model.
+    </div>
+</body>
+</html>`;
+}
+
+function renderCurrentConditions(c) {
+    if (!c) return '<p class="unavailable-note">Current conditions unavailable.</p>';
+    return `
+    <div class="stat-row">
+        <div class="stat"><span class="stat-label">Temperature</span><span class="stat-value">${fmt(c.temperature_c, '°C')}</span></div>
+        <div class="stat"><span class="stat-label">Anomaly</span><span class="stat-value">${fmt(c.temperature_anomaly_c, '°C')}</span></div>
+        <div class="stat"><span class="stat-label">AQI</span><span class="stat-value">${fmt(c.aqi)}</span></div>
+        <div class="stat"><span class="stat-label">CO₂</span><span class="stat-value">${fmt(c.co2_ppm, ' ppm')}</span></div>
+    </div>
+    ${c.aqi_data_source && c.aqi_data_source !== 'live' ? `<p class="unavailable-note">AQI source: ${escapeHtml(c.aqi_data_source)}</p>` : ''}`;
+}
+
+function renderWeatherForecast(fc) {
+    if (!fc || !fc.days || fc.days.length === 0) {
+        return `<p class="unavailable-note">Forecast unavailable at generation time (source: ${fc ? escapeHtml(fc.status) : 'unknown'}).</p>`;
+    }
+    const rows = fc.days.map(d => `
+        <tr>
+            <td>${d.date}</td>
+            <td>${fmt(d.temp_max_c, '°C')} / ${fmt(d.temp_min_c, '°C')}</td>
+            <td>${fmt(d.precipitation_mm, 'mm')}</td>
+            <td>${fmt(d.wind_max_kmh, 'km/h')}</td>
+        </tr>`).join('');
+    return `<table><thead><tr><th>Date</th><th>High / Low</th><th>Rain</th><th>Max Wind</th></tr></thead><tbody>${rows}</tbody></table>`;
+}
+
+function renderAqiForecast(fc) {
+    if (!fc || !fc.days || fc.days.length === 0) {
+        return `<p class="unavailable-note">Forecast unavailable at generation time (source: ${fc ? escapeHtml(fc.status) : 'unknown'}).</p>`;
+    }
+    const rows = fc.days.map(d => `<tr><td>${d.date}</td><td>${fmt(d.aqi_max)}</td><td>${fmt(d.pm25_max_ugm3, ' µg/m³')}</td></tr>`).join('');
+    return `<table><thead><tr><th>Date</th><th>Peak AQI</th><th>Peak PM2.5</th></tr></thead><tbody>${rows}</tbody></table>`;
+}
+
+function renderWildfireRisk(risk) {
+    if (!risk || risk.score === null || risk.score === undefined) {
+        return '<p class="unavailable-note">Fire risk data unavailable at generation time.</p>';
+    }
+    const badgeClass = `badge-${(risk.category || 'unavailable').toLowerCase()}`;
+    const inputs = risk.inputs || {};
+    return `
+    <p><span class="badge ${badgeClass}">${risk.category}</span> — Score ${risk.score}/100
+        <span style="color:#888; font-size:0.8rem;"> (rule-based index, not a trained ML model)</span></p>
+    <div class="stat-row">
+        <div class="stat"><span class="stat-label">Temp</span><span class="stat-value">${fmt(inputs.temp_c, '°C')}</span></div>
+        <div class="stat"><span class="stat-label">Humidity</span><span class="stat-value">${fmt(inputs.humidity_pct, '%')}</span></div>
+        <div class="stat"><span class="stat-label">Wind</span><span class="stat-value">${fmt(inputs.wind_kmh, ' km/h')}</span></div>
+        <div class="stat"><span class="stat-label">NDVI</span><span class="stat-value">${fmt(inputs.ndvi)}</span></div>
+    </div>`;
+}
+
+function renderNearbyReports(reports) {
+    if (!reports || reports.length === 0) {
+        return '<p class="unavailable-note">No citizen reports filed nearby.</p>';
+    }
+    const rows = reports.map(r => `
+        <tr>
+            <td>${escapeHtml(r.incident_type)}</td>
+            <td>${r.severity}/5</td>
+            <td>${r.satellite_confirmed ? 'Satellite-confirmed' : 'Unconfirmed'}</td>
+            <td>${r.timestamp ? new Date(r.timestamp).toLocaleDateString() : '--'}</td>
+        </tr>`).join('');
+    return `<table><thead><tr><th>Type</th><th>Severity</th><th>Status</th><th>Date</th></tr></thead><tbody>${rows}</tbody></table>`;
+}
+
+function fmt(value, suffix = '') {
+    if (value === null || value === undefined) return '--';
+    return `${value}${suffix}`;
+}
+
+function escapeHtml(str) {
+    const div = document.createElement('div');
+    div.textContent = str;
+    return div.innerHTML;
+}

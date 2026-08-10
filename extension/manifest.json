@@ -1,0 +1,37 @@
+{
+  "manifest_version": 3,
+  "name": "Autonomous Planetary Health OS",
+  "version": "0.1.0",
+  "description": "Real-time environmental threat monitoring, prediction, and mitigation recommendations.",
+
+  "permissions": [
+    "alarms",
+    "storage",
+    "notifications",
+    "sidePanel"
+  ],
+
+  "host_permissions": [
+    "http://localhost:8000/*"
+  ],
+
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "Planetary Health OS"
+  },
+
+  "side_panel": {
+    "default_path": "sidepanel.html"
+  },
+
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  }
+}

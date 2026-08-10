@@ -763,8 +763,22 @@ class GlobeManager {
             const envData = await api.getEnvironment(lat, lon);
             const shiData = await api.getShi(lat, lon);
             const ndviData = await api.getNdviValue(lat, lon, this.currentDate);
-            
-            if (ui) ui.updateAnalyticsPanel(climateData, envData, shiData, ndviData);
+
+            // Predictive AI (Phase 2): fetched alongside the existing calls
+            // above rather than blocking on them — these three hit
+            // different upstream services (Open-Meteo, MODIS) than the
+            // existing calls, so there's no shared rate limit to worry
+            // about by running them concurrently.
+            const [forecastData, aqiForecastData, wildfireRiskData] = await Promise.all([
+                api.getWeatherForecast(lat, lon, 7),
+                api.getAirQualityForecast(lat, lon, 5),
+                api.getWildfireRisk(lat, lon),
+            ]);
+
+            if (ui) {
+                ui.updateAnalyticsPanel(climateData, envData, shiData, ndviData);
+                ui.updateForecastPanels(forecastData, aqiForecastData, wildfireRiskData);
+            }
         } catch (e) {
             console.error("Failed to load analytics:", e);
         }
@@ -899,8 +913,15 @@ class GlobeManager {
         const label = labels[type];
 
         if (!data || !data.features || data.features.length === 0) {
+            // Distinguish "server unreachable" from "server responded but
+            // had nothing to give us" — these have different causes and
+            // different fixes, and used to show the same misleading
+            // message regardless of which one actually happened.
+            const message = api.lastErrorKind === 'network'
+                ? `Could not reach the backend — check that the FastAPI server is running (e.g. via start_project.bat or "uvicorn main:app") and reachable at ${CONFIG.API_BASE_URL}.`
+                : `The backend is running, but couldn't get real ${label} data from its upstream source (Open-Meteo) right now — check the backend server's console log for the actual error, or try again in a minute.`;
             document.dispatchEvent(new CustomEvent('layerNotice', {
-                detail: { message: `Could not load ${label} data — check that the backend server is running.` }
+                detail: { message }
             }));
             return;
         }
@@ -1054,8 +1075,11 @@ class GlobeManager {
         // of real air quality.
         const stations = await api.getStationsWithReadings();
         if (!stations || !stations.length) {
+            const message = api.lastErrorKind === 'network'
+                ? `Could not reach the backend — check that the FastAPI server is running and reachable at ${CONFIG.API_BASE_URL}.`
+                : 'No live air-quality readings available — check that OPENAQ_API_KEY is set in backend/.env (get a free key at https://explore.openaq.org), then restart the backend. If it is set, OpenAQ may just be rate-limiting or briefly down — try again shortly.';
             document.dispatchEvent(new CustomEvent('layerNotice', {
-                detail: { message: 'No live air-quality readings available right now — check that OPENAQ_API_KEY is set in backend/.env, or try again shortly.' }
+                detail: { message }
             }));
             return;
         }

@@ -51,6 +51,14 @@ def _has_api_key() -> bool:
     return bool(os.environ.get("OPENAQ_API_KEY", "").strip())
 
 
+def has_api_key() -> bool:
+    """Public accessor for _has_api_key(), for other services (e.g.
+    alerts.py) that need to distinguish 'no key configured' from 'key
+    configured but no station nearby' without reaching into this
+    module's private helper."""
+    return _has_api_key()
+
+
 def get_stations(limit: int = 1000) -> List[Dict[str, Any]]:
     """
     Real OpenAQ v3 station list with PM2.5/PM10 sensors, each including
@@ -112,6 +120,100 @@ def get_station_latest_pm25(location_id: int) -> float | None:
 _stations_readings_cache = {"data": None, "fetched_at": None}
 STATIONS_READINGS_CACHE_HOURS = 1
 MAX_STATIONS_WITH_READINGS = 100
+
+# Small per-point cache for the radius-scoped lookup below. Keyed on a
+# coarse rounding of (lat, lon, radius_km) so nearby repeat requests (e.g.
+# the extension re-checking the same monitored location every 15 minutes)
+# hit cache instead of re-querying OpenAQ every time.
+_near_cache: Dict[tuple, Dict[str, Any]] = {}
+NEAR_CACHE_MINUTES = 10
+
+# OpenAQ v3's /locations endpoint accepts a radius filter, but caps it
+# server-side (their docs put the ceiling at 25km at the time this was
+# written — that may have changed; this client can't verify it live from
+# here, so we clamp defensively and let OpenAQ's own error response be the
+# source of truth if this cap is ever wrong).
+_OPENAQ_MAX_RADIUS_M = 25_000
+
+
+def get_stations_near(lat: float, lon: float, radius_km: float, limit: int = 25) -> List[Dict[str, Any]]:
+    """
+    Targeted alternative to get_stations_with_readings() for callers that
+    only care about one point — e.g. alerts.py's /alerts/summary, used by
+    the browser extension's alarm-driven check.
+
+    get_stations_with_readings() was built for the main map: fetch up to
+    100 stations GLOBALLY, enrich all of them, cache for an hour. Using
+    that for a single-point radius query meant paying for ~100 individual
+    OpenAQ /latest calls just to keep the handful actually within range —
+    slow (10+ concurrent-batched round trips) and wasteful of OpenAQ's
+    rate limit on stations the caller immediately discards. This function
+    asks OpenAQ for stations near the point directly, so enrichment only
+    ever touches the few stations that matter for this call.
+    """
+    if not _has_api_key():
+        return []
+
+    radius_m = min(radius_km * 1000, _OPENAQ_MAX_RADIUS_M)
+    cache_key = (round(lat, 2), round(lon, 2), round(radius_m))
+    now = datetime.now(timezone.utc)
+
+    cached = _near_cache.get(cache_key)
+    if cached and (now - cached["fetched_at"]) < timedelta(minutes=NEAR_CACHE_MINUTES):
+        return cached["data"]
+
+    try:
+        resp = requests.get(
+            f"{_OPENAQ_BASE}/locations",
+            params={
+                "coordinates": f"{lat},{lon}",
+                "radius": int(radius_m),
+                "limit": limit,
+                "parameters_id": [2],  # PM2.5
+            },
+            headers=_get_headers(),
+            timeout=10,
+        )
+        resp.raise_for_status()
+        stations = resp.json().get("results", [])
+    except Exception as e:
+        logger.warning(f"get_stations_near failed for ({lat},{lon},{radius_km}km): {e}")
+        # Serve stale cache for this point if we have it, rather than
+        # nothing, but never fabricate a reading.
+        return cached["data"] if cached else []
+
+    if not stations:
+        _near_cache[cache_key] = {"data": [], "fetched_at": now}
+        return []
+
+    # Only a handful of stations at this point (radius-scoped, not the
+    # global top-100) — safe to enrich them all concurrently without the
+    # 10-wave bottleneck get_stations_with_readings() has at 100 stations.
+    enriched = []
+    with ThreadPoolExecutor(max_workers=min(10, len(stations))) as executor:
+        future_to_station = {
+            executor.submit(get_station_latest_pm25, s["id"]): s for s in stations
+        }
+        for future in as_completed(future_to_station):
+            station = future_to_station[future]
+            try:
+                reading = future.result()
+            except Exception as e:
+                logger.warning(f"PM2.5 fetch failed for station {station['id']}: {e}")
+                continue
+            if reading is None:
+                continue
+            enriched.append({
+                "id": station["id"],
+                "name": station.get("name") or station.get("location"),
+                "coordinates": station.get("coordinates"),
+                "country": (station.get("country") or {}).get("name"),
+                "city": station.get("locality"),
+                "pm25": reading,
+            })
+
+    _near_cache[cache_key] = {"data": enriched, "fetched_at": now}
+    return enriched
 
 
 def get_stations_with_readings(limit: int = MAX_STATIONS_WITH_READINGS) -> List[Dict[str, Any]]:
