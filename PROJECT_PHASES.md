@@ -1,66 +1,70 @@
-# GaiaNet Earth - Project Phases Status (v2.0.0 Refactor)
+# GaiaNet Earth - Project Phases Status
 
-This document tracks the progress of the GaiaNet Earth project, now fully restructured into the **5-Tab Navigation Flow**.
-
----
-
-## NASA-Level Immersive Vision (5-Screen Flow)
-
-### 🌍 Tab 1: Immersive Earth (The "Blue Marble" View)
-- [x] **Core Planet Rendering** (CesiumJS)
-- [x] **Real-time Fire Points** (NASA FIRMS)
-- [x] **Minimalistic UI Mode** (Now the default "Earth" Tab)
-- [ ] **Dynamic Atmosphere** (Night-lights and cloud layers)
-
-### 📍 Tab 2: Location Insight (The "Deep Dive")
-- [x] **Coordinate Targeting** (Universal: Click anywhere on globe)
-- [x] **Environmental Stats** (Climate/Vegetation)
-- [x] **Dynamic Graphs** (Animated temporal charts)
-- [x] **Localized Risk Score** (Derived from anomaly data)
-
-### ⏳ Tab 3: Time Slider (The "Temporal Engine")
-- [x] **Timeline UI Component** (Fixed slider sync)
-- [x] **Temporal Data Sync** (Updating globe layers as slider moves)
-- [ ] **Historical Archive Access** (Multi-year playback)
-
-### 🧠 Tab 4: Prediction Center (The "Forecaster")
-- [x] **Scenario-based Risk Calculation** (Basic metrics in analytics)
-- [ ] **Probabilistic Heatmaps** (Visualizing drought/flood chance)
-- [ ] **ML-based Trend Analysis** (Prophet/LSTM integration)
-
-### 🚀 Tab 5: Digital Lab (The "Digital Laboratory")
-- [x] **Scenario Selection Menu**
-- [x] **Reactive Earth Logic** (Global color/size updates)
-- [x] **Custom Scenario Sliders** (Temp and Rainfall offsets)
+This document tracks feature-level progress. It's kept in sync with `PROJECT_STATUS.md` (the authoritative current-state doc) rather than duplicating its data table — this file is the checklist view, that one is the detail view.
 
 ---
 
-## Recent Milestones
-### 2026-03-23: The "5-Tab" Refactor
-- Implemented sidebar navigation to switch between focused functional modes.
-- Fixed critical JS bug in `timeline-slider` synchronization.
-- Added "Click Anywhere" location selection for the globe.
-- Created `start_project.bat` for one-click launch capability.
+## Current Navigation (5 tabs live; 1 disabled)
+
+### 🌍 Tab: Immersive Earth
+- [x] Core Planet Rendering (CesiumJS)
+- [x] Real-time Fire Points (NASA FIRMS)
+- [x] Auto-rotating cinematic default view
+- [ ] Dynamic Atmosphere (night-lights, cloud layers) — not started
+
+### 📍 Tab: Location Insight
+- [x] Coordinate Targeting (click anywhere on globe, or search)
+- [x] Real Environmental Stats (climate, AQI, CO₂, NDVI)
+- [x] Dynamic Charts
+- [x] Localized Risk Score (SHI, disclosed formula)
+
+### ⏳ Historical Timeline / "Temporal Engine" — **DISABLED, not a live tab**
+- [x] Timeline UI component and slider logic exist in `js/ui.js` (`case 'temporal':`)
+- [x] Historical imagery date range plumbing exists
+- [ ] **Not reachable from navigation** — removed from `index.html`'s tab dock because the imagery-layer state didn't settle correctly on tab entry (see the comment directly above the nav markup in `index.html`). This needs a proper state-machine fix, not another patch, before it's re-added to the visible nav. Do not describe this as shipped until it's actually back in the tab bar and has been manually verified to load historical imagery correctly on every entry.
+
+### 🧠 Tab: Prediction / Forecast Lab
+- [x] Real multi-day weather + AQI forecasts (Open-Meteo NWP — not a custom-trained model, see `PROJECT_OVERVIEW.md` §4)
+- [x] Rule-based wildfire-risk score (documented formula, not ML — see `wildfire_risk.py`)
+- [x] Cited "what-if" scenario simulator (deforestation/emissions, real coefficients)
+- [ ] Probabilistic heatmaps (drought/flood chance) — not started
+- [ ] A genuinely trained ML model for any of the above — intentionally not built; would require real historical training data this project doesn't have. See `PROJECT_OVERVIEW.md` §4 for why this isn't on the roadmap as a near-term item.
+
+### 🚀 Tab: Community Reports
+- [x] Right-click citizen incident reporting
+- [x] Satellite (NASA FIRMS) cross-confirmation for fire-type reports
+- [x] SQLite persistence
+
+### 🌐 Tab: Global Health Index
+- [x] Country-level composite SHI (real OpenAQ + Open-Meteo + MODIS)
+- [x] Per-country transparency on which real components contributed
+- [ ] Full country coverage — currently ~90 countries with a capital-coordinate reference; the rest get an AQI-only score or no score
 
 ---
 
-## Strategic Recommendations & Add-ons
+## Strategic Recommendations & Add-ons (not yet built — genuine roadmap, not shipped claims)
 
-### 1. Advanced Predictive Intelligence
-- **Time-Series Forecasting**: Integrate ML models (e.g., Prophet or LSTM) to predict temp/NDVI changes over the next 12 months.
-- **Anomaly Alert System**: Implement a real-time notification sidebar for "High Priority Events".
+### 1. Trust & Transparency (highest priority — see full audit for rationale)
+- Surface the `data_source`/`confidence` fields the backend already returns as visible UI badges — this is currently computed end-to-end but stops at the API response.
+- Add a visible "simulated" indicator when the Atmospheric Sync weather effect is running on its deterministic mock (no `OPENWEATHERMAP_API_KEY` configured).
 
-### 2. User Experience & Collaboration
-- **Monitoring Zones**: Allow users to "Save Location" and receive automated reports for specific coordinates (Digital Twin bookmarks).
-- **Shareable Snapshots**: Generate a unique URL containing the current camera position, zoom, and active layers.
+### 2. Historical Timeline Rebuild
+- Fix the imagery-layer state bug and re-enable the tab (see above).
 
-### 3. Data Depth & Export
-- **Multi-Source Fusion**: Integrate ESA Sentinel data or Copernicus Atmosphere Monitoring Service (CAMS).
-- **Intelligence Export**: Add a "Download Report" feature to export raw GeoJSON/CSV data.
+### 3. Predictive Intelligence (real, not fabricated)
+- If/when a historical per-region time-series store exists, evaluate a real regional forecasting model as a *complement* to the existing Open-Meteo forecast — never as a "trained model" claim without actual training data.
+- Anomaly detection on already-fetched real historical series (statistically simple, e.g. z-score/STL — doesn't require new data).
 
-### 4. Visual Fidelity
-- **Dynamic Atmosphere**: Implement night-side city lights and cloud cover layers for a more immersive feel.
-- **Interactive Legends**: Allow users to click legend ranges to highlight only those data points on the globe.
+### 4. User Experience & Collaboration
+- Minimum-viable responsive/mobile layout (currently effectively desktop-only).
+- Basic accessibility pass (keyboard navigation, ARIA labeling).
+- "Save Location" monitoring bookmarks.
+- Shareable snapshot URLs (camera position + active layers).
+
+### 5. Data Depth & Export
+- Broaden `country_coords.py` coverage.
+- ESA Sentinel / Copernicus CAMS as additional real data sources.
+- Raw GeoJSON/CSV export.
 
 ---
-*Last Updated: 2026-03-23*
+*This file reflects the current `main` branch. Update it in the same PR as any code change that adds/removes/disables a feature — the previous version of this document described the Temporal tab as shipped for months after it was actually disabled, which is exactly the kind of drift this note is here to prevent.*

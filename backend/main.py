@@ -56,6 +56,28 @@ def read_root():
         "message": "GaiaNet Earth Environmental Intelligence API is running with real-world data feeds."
     }
 
+@app.get("/api/config")
+def get_runtime_config():
+    """
+    The one piece of config the frontend needs but must NOT ship hardcoded
+    in a static JS file: the Cesium Ion token. Previously this was a real
+    credential committed directly in js/config.js — anyone browsing the
+    public repo could lift it. Now it lives in backend/.env
+    (CESIUM_ION_TOKEN, gitignored) and is served here instead.
+
+    This does not make the token secret from the browser's own network
+    tab — Cesium Ion tokens are inherently a client-side credential, used
+    directly by the browser to fetch tiles. What this DOES fix is keeping
+    it out of git history and source control, and letting it be rotated
+    by editing one gitignored file instead of a commit. For real
+    protection against abuse, also restrict the token to specific
+    referrer domains in the Ion dashboard (https://ion.cesium.com/tokens).
+
+    Returns null (not an error) if unconfigured — the frontend already
+    handles that by falling back to Cesium's own default imagery.
+    """
+    return {"cesium_ion_token": os.environ.get("CESIUM_ION_TOKEN", "").strip() or None}
+
 @app.get("/stations")
 def get_stations():
     """Fetch global air quality stations from real OpenAQ v3 data.
@@ -284,6 +306,15 @@ def get_weather_conditions():
     """Global real-time cloud cover grid (GeoJSON) — real current readings
     from Open-Meteo, same underlying fetch as /climate and /rainfall."""
     return climate.get_weather_conditions_geojson()
+
+@app.get("/wind")
+def get_wind():
+    """Global real-time wind speed + direction grid (GeoJSON) — same
+    underlying Open-Meteo fetch as /climate, /rainfall, and
+    /weather-conditions (wind fields were added to that shared request
+    rather than issuing a separate upstream call). Powers the wind
+    arrow-glyph layer on the globe."""
+    return climate.get_wind_geojson()
 
 @app.get("/environment")
 def get_environment(lat: float = Query(...), lon: float = Query(...)):

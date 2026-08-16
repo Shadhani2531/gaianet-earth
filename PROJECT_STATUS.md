@@ -1,52 +1,54 @@
-# 🚀 GaiaNet Earth (v3.0.0) — High-Fidelity Simulation Environment
-*Moving from Environmental Dashboard to Dynamic Digital Twin*
+# GaiaNet Earth (v2.1.0) — Project Status
 
-## Current System Overview
-GaiaNet Earth is now a **High-Fidelity Dynamic Simulation Environment**. It features a "Liquid Glass" spatial HUD, a bi-directional reporting layer for citizen science, and a causal simulation engine that forecasts environmental impacts across a 4D temporal scale (1984-2030).
+This document is meant to be read alongside the actual code, not instead of it — it's an honest status snapshot, updated to match what's currently in `main` rather than what was originally planned.
 
 ---
 
-## 🌎 5-Tab Operational Command Center
-1.  **Immersive Earth**: Immersive CesiumJS globe with live satellite imagery and **Geospatial Search-to-Fly**.
-2.  **Location Insight**: Centered analytics with real-time AQI, Temp, and **Neural Scan** synchronization.
-3.  **Temporal Engine (4D)**: Dual-timeline playback with **Split-Screen** historical comparison and physical globe rotation.
-4.  **Forecast Center**: Predictive risk modeling with a live **Sustainability Health Index (SHI)** gauge.
-5.  **Simulator/Lab**: Causal parameter control (Temp/Rain offsets) with interactive "What-if" result charts.
+## Current Tab Structure (5 tabs, live in `index.html`)
+
+1. **🌍 Earth** — Immersive CesiumJS globe with live NASA GIBS satellite imagery and auto-rotate.
+2. **📍 Insight** — Click anywhere on the globe (or search a place) for real climate/AQI/CO₂/NDVI analytics at that point.
+3. **🧠 Prediction / Forecast Lab** — Real multi-day weather + AQI forecasts, the rule-based wildfire-risk score, and the "what-if" scenario simulator.
+4. **📢 Reports** — Citizen incident reporting (right-click the globe), cross-checked against real NASA FIRMS wildfire detections.
+5. **🌐 Global Health Index** — Country-level composite Sustainability Health Index built from real OpenAQ + Open-Meteo + MODIS data at each country's capital.
+
+### About the Historical Timeline / "4D Temporal Engine" tab
+An earlier version of this project had a 6th tab for historical satellite-imagery playback with a time slider. **It's currently removed from navigation** — the imagery-layer state didn't settle correctly when the tab activated, and it needs a proper rebuild rather than another patch (see the comment in `index.html` right above the tab-nav markup). The panel HTML and its handling in `js/ui.js` (`case 'temporal':`) are intentionally left in place so a real fix has something to build on, but the tab is not reachable from the UI today. Treat any older doc, screenshot, or memory of a working time slider as **not current**.
 
 ---
 
-## 🔥 Phase 3 Structural Upgrades
-- **Citizen Science Layer**: Right-click to report incidents. Pulsing global entities with live feed.
-- **Atmospheric Synchronization Engine (ASE)**: Mirrors real-world weather states (Rain/Snow) using post-process shaders.
-- **"Neural Scan" Sync**: Cinematic 1.2s data synchronization animation on the Insight card.
-- **Dynamic NDVI Legend**: Fixed color scale (Sparse to Rainforest) linked to vegetation toggle.
-- **4D Temporal Engine**: Physical globe rotation (360°/yr) synchronized with the timeline slider.
-- **Causal Cascade Engine**: Drought logic: Rainfall drops $\rightarrow$ NDVI crashes $\rightarrow$ Fire Risk spikes.
-- **Search & Fly-To**: Integrated global geocoding for seamless navigation.
-
----
-
-## 🔥 Environmental Data Layer Status
+## Data Layer Status — what's actually live vs. estimated vs. not real-time
 
 | Data Layer | Type | Source | Update Freq | Status |
 | :--- | :--- | :--- | :--- | :--- |
-| **Wildfires** | Real-Time | NASA FIRMS | ~10 mins | ✅ Live Integration |
-| **Satellite Imagery** | Real-Time | NASA GIBS | Live | ✅ 1984-2030 Support |
-| **Air Quality (AQI)** | Real-Time | OpenAQ / WAQI | Live | ✅ Data-Driven |
-| **Ground Truth** | Community | Local API (SQLite) | Live | ✅ Bi-Directional |
-| **Weather (ASE)** | Real-Time | OpenWeatherMap | Live | ✅ Post-Processed |
+| **Wildfires** | Real-time | NASA FIRMS (MODIS 24h) | ~10 min cache | ✅ Live |
+| **Satellite Imagery** | Real-time | NASA GIBS | Live tiles | ✅ Live |
+| **Air Quality (point)** | Real-time, honest fallback | WAQI/AQICN | Live | ✅ Live when `WAQI_TOKEN` is set; falls back to a **labeled** estimate otherwise, never silently fabricated |
+| **Air Quality (stations, global)** | Real-time, 1–6h cache | OpenAQ v3 | Live | ✅ Live, requires `OPENAQ_API_KEY` (free) |
+| **CO₂ (global)** | Real, monthly | NOAA GML | Daily cache of a monthly figure | ✅ Live |
+| **Vegetation / NDVI (point)** | Real, with honest fallback | NASA MODIS (MOD13Q1 via ORNL DAAC) | 16-day composite | ✅ Live where MODIS has coverage; a clearly labeled biome/season **estimate** elsewhere (ocean, persistent cloud, pre-2000 dates) |
+| **Climate history & current conditions** | Real | Open-Meteo | Hourly cache | ✅ Live |
+| **7-day weather forecast** | Real NWP forecast | Open-Meteo forecast model | Live | ✅ Live — this is Open-Meteo's own real weather-model output, **not** a custom-trained LSTM/ARIMA. See `backend/services/forecast.py`'s docstring for why that's a deliberate choice, not a shortcut. |
+| **5-day AQI forecast** | Real, model-derived | Open-Meteo air-quality model | Live | ✅ Live, same caveat as above |
+| **Wildfire Risk Score** | Derived (transparent formula) | Real temp/humidity/wind (Open-Meteo) + real/estimated NDVI | Live | ✅ A documented rule-based fire-danger index — **not** a trained Random Forest/XGBoost model. See `backend/services/wildfire_risk.py`'s docstring for the honest reason why. |
+| **"What-If" Scenario Simulator** | Derived, cited | Real current data + published climate-science coefficients (PLOS ONE 2019, PNAS 2023, WRI 2021, EPA AQI breakpoints) | On demand | ✅ Every projected number carries a `measured`/`estimated`/`modeled` confidence tag and a citation — see `backend/services/scenario_engine.py` |
+| **Composite SHI (point & global)** | Derived from real inputs | Real AQI (+ real climate/NDVI at country level) | Live / 6h cache | ✅ A disclosed formula, not a black-box score |
+| **Atmospheric Sync (rain/snow visuals)** | Real *if configured*, else a labeled deterministic mock | OpenWeatherMap | Live | ⚠️ Without `OPENWEATHERMAP_API_KEY`, this silently runs on a deterministic (not random, but not real) placeholder — the API response does say `"status": "mock"`, but the UI doesn't yet surface that visually. Set the key for real weather-driven visuals. |
+| **Ask Gaia (chat assistant)** | Grounded LLM | An OpenAI-compatible LLM + this backend's own real endpoints | Live | ✅ Requires `GAIA_LLM_API_KEY`; the assistant is instructed to call a real tool for every number rather than guess |
+| **Ground Truth / Citizen Reports** | Real user input | SQLite, cross-checked against real NASA FIRMS for fire-type reports | Live | ✅ Live |
+
+There is no trained machine-learning model wired into any live endpoint in this project today. An earlier ML prototype (`backend/ml/`, trained on synthetic data) was removed rather than kept as unused dead weight — see the git history if you need to reference it. If real historical outcome data (e.g., confirmed fire events) becomes available later, `wildfire_risk.py`'s docstring already lays out how a genuine trained classifier could replace the current formula.
 
 ---
 
-## 📌 Project Phase Status
+## Known Gaps (honest list)
 
-| Phase | Status | Progress |
-| :--- | :--- | :--- |
-| **Phase 1 (Visualization)** | ✅ Completed | NASA-level immersion with Liquid Glass HUD. |
-| **Phase 2 (Data Layers)** | ✅ Completed | Fully integrated Live Wildfire & Air Quality APIs. |
-| **Phase 3 (Simulation)** | ✅ Completed | 4D Temporal, Causal Simulation, & Citizen Science. |
-| **Phase 4 (Forecast)** | 🚀 In Progress | Expanding AI-driven anomaly detection models. |
-| **Phase 5 (Infrastructure)**| ✅ Completed | Unified Server & Docker Support. |
+- No authentication, no automated test suite, no CI pipeline.
+- In-process caching only (Python dicts with TTLs) — cache resets on every restart, not shared across multiple backend instances.
+- `country_coords.py` covers roughly 90 countries; `/shi-global` only scores countries with a capital in that table.
+- The frontend has essentially no responsive/mobile layout today (one CSS media query, scoped to the Ask Gaia chat panel).
+- Accessibility (keyboard navigation, ARIA labeling) has not had a dedicated pass yet.
 
 ---
-*Last Updated: 2026-03-27*
+
+*This file describes the current `main` branch. If something here looks wrong, the code is the source of truth — please open an issue or PR to fix whichever one is out of date.*

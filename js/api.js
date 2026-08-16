@@ -129,6 +129,10 @@ class ApiService {
         return this.get('/weather-conditions');
     }
 
+    async getWind() {
+        return this.get('/wind');
+    }
+
     async getStationsWithReadings() {
         return this.get('/stations-with-readings');
     }

@@ -5,8 +5,11 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>GaiaNet Earth – Digital Twin of the Planet</title>
 
-    <!-- Google Fonts -->
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <!-- Google Fonts: Inter/Outfit for UI chrome, JetBrains Mono for
+         live data readouts (AQI, temp, CO2, SHI, forecasts) — monospace
+         numerals read as "instrument telemetry" rather than "web app
+         copy," and keep digit widths stable as values update. -->
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Outfit:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
     
     <!-- CesiumJS -->
     <script src="https://cesium.com/downloads/cesiumjs/releases/1.112/Build/Cesium/Cesium.js"></script>
@@ -127,6 +130,11 @@
                     <input type="checkbox" id="layer-sensors">
                     <span class="slider"></span>
                     <span class="label-text"><i class="fa-solid fa-tower-broadcast"></i> Global Air Quality (OpenAQ)</span>
+                </label>
+                <label class="toggle-switch">
+                    <input type="checkbox" id="layer-wind">
+                    <span class="slider"></span>
+                    <span class="label-text"><i class="fa-solid fa-wind"></i> Wind (direction &amp; speed)</span>
                 </label>
             </div>
             
@@ -556,7 +564,6 @@
     <script src="js/state.js"></script>
     <script src="js/api.js?v=3"></script>
     <script src="js/ui.js?v=5"></script>
-    <script src="js/simulation.js"></script>
     <script src="js/weather.js"></script>
     <script src="js/globe.js?v=4"></script>
     <script src="js/gaia.js?v=3"></script>

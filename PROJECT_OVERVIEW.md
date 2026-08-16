@@ -1,71 +1,47 @@
-# GaiaNet Earth: Autonomous Planetary Health Operating System
+# GaiaNet Earth: Environmental Decision-Support Dashboard
 
 ## 1. Project Vision
-GaiaNet Earth has evolved from a reactive 3D visualization dashboard into a **Unified Environmental Intelligence Platform**. It is designed to act as a prototype Digital Twin of Earth, integrating real-time environmental datasets, predictive analytics, and interactive scenario simulations. 
+GaiaNet Earth is a single-page, portfolio-scale environmental intelligence dashboard: a CesiumJS globe combining several real, live data sources with a couple of genuinely differentiated features — a cited "what-if" climate scenario simulator and a grounded LLM assistant. It's built around one core discipline, applied consistently across the backend: **never present a fabricated number as if it were measured, and always say how confident a derived number actually is.**
 
-The ultimate goal of GaiaNet is to serve as an **Autonomous Planetary Health Operating System**. Instead of merely displaying static maps, the platform actively monitors, predicts, and recommends solutions for environmental threats in real time using advanced Artificial Intelligence.
+It is *not* an autonomous monitoring system, a digital twin in the full simulation sense, or an AI-model-driven forecaster — see Section 4 below for exactly what "AI" does and doesn't mean in this codebase, and `PROJECT_STATUS.md` for the full real/estimated/derived breakdown per feature.
 
 ## 2. Core Objectives & Capabilities
-*   **Unified Digital Earth Platform**: An interactive 3D globe (CesiumJS) integrating disparate environmental datasets into a single layer-based view.
-*   **Time-Based (4D) Earth Model**: A temporal engine enabling users to observe historical trends, monitor real-time changes, and simulate future outcomes.
-*   **Sustainability Health Index (SHI)**: A composite index combining multiple environmental indicators (like NDVI and Air Quality) to track regional health and detect high-risk areas.
-*   **Environmental Scenario Simulation**: A "Digital Lab" for executing "what-if" analyses to test the impact of policy decisions (e.g., deforestation impact, pollution increases).
+- **Unified Earth View**: an interactive 3D globe (CesiumJS) layering several real environmental datasets — wildfires, air quality, vegetation, climate — into one view.
+- **Point-Level Analysis**: click anywhere for real climate history, current AQI/temperature/CO₂, NDVI, and short-term forecasts at that exact location.
+- **Sustainability Health Index (SHI)**: a disclosed, non-black-box composite score combining real air-quality, climate-stability, and vegetation components, at both a point and country level.
+- **Cited Scenario Simulation**: a "what-if" tool that projects deforestation/emissions effects using real, individually cited climate-science coefficients applied to a location's real current data — not a trained model, and not guessed constants either.
 
-## 3. The 5-Tab Operational Command Center
-The system is structured into five specialized modules to minimize cognitive overload and enhance focused analysis:
-1.  **Immersive Earth**: A 3D globe powered by CesiumJS with live satellite imagery and seamless global exploration.
-2.  **Location Insight**: Detailed analytics for selected coordinates, featuring real-time AQI, Temperature, and CO₂ levels.
-3.  **Temporal Engine**: A time-slider for visualizing historical environmental changes and playback of past trends.
-4.  **Prediction Center**: Risk forecasting models and environmental predictions for wildfires and drought.
-5.  **Digital Lab**: A scenario simulation environment for global parameter adjustments and "what-if" experiments.
+## 3. The 5-Tab Structure (current)
+1. **Immersive Earth** — 3D globe with live satellite imagery and auto-rotate.
+2. **Location Insight** — Point-specific analytics: real-time AQI, temperature, CO₂, NDVI, forecasts.
+3. **Prediction / Forecast Lab** — Real multi-day forecasts, the wildfire-risk formula, and the what-if simulator.
+4. **Community Reports** — Citizen incident reporting, cross-checked against real satellite wildfire data.
+5. **Global Health Index** — Country-level composite SHI.
 
-## 4. Next-Generation AI Integration (The Major Upgrade)
-To transition GaiaNet into a fully autonomous system, the platform is being upgraded with four core AI pillars:
+*(A 6th tab, a historical-imagery time slider, existed in an earlier version and is currently disabled pending a rebuild — see `PROJECT_STATUS.md` for the specifics and why it's not counted above.)*
 
-### 🤖 Agentic AI (Autonomous Monitoring & Alerts)
-Background AI "sentinels" that work non-stop without needing manual user input.
-*   **24/7 Threat Monitoring**: Background scripts continuously scan live NASA FIRMS (wildfires) and OpenAQ (air quality) data feeds.
-*   **Instant Anomaly Alerts**: Automatically flags map hotspots and fires off notifications when air quality spikes (e.g., AQI > 200) or fire clusters form.
-*   **Automated Stress Testing**: Runs background simulations during idle time to spot high-risk regions vulnerable to heatwaves or droughts, generating a daily Global Vulnerability Map.
+## 4. What "AI" Actually Means Here
+This section exists because earlier drafts of this document overstated it — worth saying plainly:
 
-### 🗣️ Generative AI (Interactive Intelligence)
-Translates complex climate data into plain-language answers and automated reports.
-*   **"Ask Gaia" Conversational Assistant**: An integrated natural language interface (powered by Gemini/OpenAI). Users can ask questions like *"What is California's wildfire risk next week?"* and receive clear, data-backed summaries.
-*   **One-Click Impact Reports**: Instantly drafts detailed Environmental Risk Reports for any clicked location, covering historical trends, current hazards, and future trajectories.
-*   **AI Mitigation Strategies**: Generates actionable, localized action plans for policymakers and response teams when a crisis is detected.
-
-### 📈 Predictive AI (Machine Learning & Forecasting)
-Upgrades simple data displays into predictive forecasting engines.
-*   **7-Day Environmental Forecasts**: Uses time-series models (like LSTM or ARIMA) to predict air quality and weather trends up to a week in advance.
-*   **Wildfire Risk Scoring**: Evaluates temperature, humidity, and vegetation density (NDVI) using ML models (like Random Forest or XGBoost) to calculate exact wildfire probabilities per region.
-
-### 🛰️ Advanced Satellite Computer Vision
-Uses satellite imagery and deep learning to visualize environmental damage over time.
-*   **Deforestation Tracking**: Feeds NASA GIBS satellite images into segmentation models (like U-Net) to highlight tree cover loss over the past decade.
-*   **Urban Sprawl Detection**: Identifies rapid concrete expansion, land-use changes, and loss of natural habitats, mapping them visually on the 3D globe.
+- **No trained forecasting model (LSTM/ARIMA) is used.** `backend/services/forecast.py` wraps Open-Meteo's own real numerical-weather-prediction output. That's a deliberate choice: this backend has no historical per-region time-series store to train on, and fabricating a "trained model" on top of borrowed/synthetic data would violate the project's own honesty principle. If that store gets built later, a real regional model could *complement* this, not replace working real data with something weaker.
+- **No trained wildfire classifier (Random Forest/XGBoost) is used.** `backend/services/wildfire_risk.py` is a transparent, documented, weighted formula over real temperature/humidity/wind/NDVI. Training a real classifier requires labeled historical fire-outcome data this project doesn't have; a fabricated "trained model" would misrepresent both the training process and its accuracy.
+- **What genuinely is "AI":** "Ask Gaia," a tool-calling LLM assistant that is only allowed to answer factual questions by calling this backend's own real endpoints — it cannot guess a number. This is the one place an LLM is used in the live product, and it's grounded by design.
+- **The scenario simulator is not AI at all** — it's real data plus cited published coefficients, and it says so explicitly in its own confidence labels (`measured` / `estimated` / `modeled`).
 
 ## 5. System Architecture & Real-World Data Integration
-GaiaNet employs a decoupled, highly scalable architecture utilizing a unified FastAPI backend and a containerized Docker deployment.
+A single FastAPI backend (`backend/main.py`) serving both the API and the static frontend (no separate frontend server needed in the default run mode), backed by small per-feature service modules that each call a real external API with an in-process TTL cache and an honestly-labeled fallback. No background workers, no message queue, no persistent cache beyond SQLite for citizen reports — this is a synchronous, request-driven architecture appropriate for its current scale, not yet a production ingestion pipeline.
 
 ### Data Layer Status
-| Data Layer | Type | Source | Update Frequency | Status |
-| :--- | :--- | :--- | :--- | :--- |
-| **Wildfires** | Real-Time | NASA FIRMS | ~10 minutes | ✅ Fully Implemented |
-| **Satellite Imagery** | Real-Time | NASA GIBS | Live | ✅ Fully Implemented |
-| **Air Quality (AQI)** | Real-Time | OpenAQ / WAQI | Live | ✅ Real Data |
-| **Climate Trends** | Real-Time | WAQI | Live | ✅ Real Data |
-| **Vegetation (NDVI)** | Simulated | Model-Based | Instant | ⚠️ Semi-Real |
+See `PROJECT_STATUS.md` for the current, maintained version of this table — kept in one place to avoid the two documents drifting apart again.
 
-## 6. Development Roadmap & Implementation Strategy
-To prevent complexity overload, development follows a strict, sequential implementation strategy.
-
-*   **Phase 1 – Visualization (✅ Completed)**: Advanced 3D Earth visualization with the 5-tab UI and Docker infrastructure.
-*   **Phase 2 – Data Layers (✅ Completed)**: Integration of real-world wildfire & air quality APIs.
-*   **Phase 3 – Time System (✅ Completed)**: Functional Temporal Engine with historical playback.
-*   **Phase 4 – AI Prediction (🚀 In Progress)**: Training ML models for pollution & vegetation forecasting. Integrating the "Ask Gaia" Generative AI.
-*   **Phase 5 – Autonomous Agents (Planned)**: Deploying background Agentic AI for 24/7 threat monitoring and automated stress testing.
+## 6. Development Roadmap
+- **Phase 1 – Visualization**: ✅ Done. 3D globe, 5-tab UI, Docker support.
+- **Phase 2 – Data Layers**: ✅ Done. Real wildfire, air-quality, climate, and vegetation integrations.
+- **Phase 3 – Simulation & Forecasting**: ✅ Done. Cited scenario engine, real Open-Meteo forecasts, rule-based wildfire risk, grounded Ask Gaia assistant.
+- **Phase 4 – Polish & Trust**: 🚧 In progress. Surfacing data-provenance badges in the UI (the backend already computes them), mobile/responsive layout, accessibility pass, automated tests.
+- **Phase 5 – Historical Timeline rebuild**: 📋 Planned, not started. Re-enable the disabled Temporal tab with a properly fixed imagery-layer state machine.
 
 ## 7. Key Strengths
-*   **Unified Ecosystem**: Combines 3D visualization, real-time analytics, and AI prediction in one cohesive platform.
-*   **Authoritative Data**: Relies on real-world datasets from NASA, OpenAQ, and Open-Meteo.
-*   **Policy-Ready**: Designed specifically to support sustainable decision-making, research use cases, and actionable climate mitigation.
+- **Authoritative, real data**: NASA, NOAA, Open-Meteo, OpenAQ, MODIS — not placeholder feeds.
+- **Disciplined honesty**: every derived number is labeled with its actual confidence level and, where relevant, its citation — genuinely rare at this project's scale.
+- **Grounded AI, not a hallucination risk**: Ask Gaia can only report real numbers it actually looked up.

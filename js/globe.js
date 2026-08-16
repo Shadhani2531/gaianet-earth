@@ -56,6 +56,7 @@ class GlobeManager {
             weather: null,
             ndvi: null,
             ndviImagery: null, // Track imagery layer separately
+            wind: null,
             wildfires: [],
             sensors: [],
             reports: []
@@ -65,7 +66,34 @@ class GlobeManager {
         this.initInteraction();
         this.listenForScenarios();
         this.loadUserReports(); // Load existing reports on startup
-        
+
+        // Canvas glyphs (glow dots, flame icons, wind arrows) are drawn
+        // once per unique color/size and reused — with up to ~500
+        // wildfires or ~100 stations on screen, regenerating a canvas
+        // per entity per render would be wasteful. See
+        // _getGlyphCanvas()/_createGlowDotCanvas()/etc. below.
+        this._glyphCache = {};
+
+        // Shared pulse animation for "urgent" point markers (severe/
+        // extreme wildfires). A plain rAF loop rather than Cesium's own
+        // clock.onTick — onTick's firing depends on the viewer's
+        // shouldAnimate state, which isn't guaranteed on here, while a
+        // manual loop is simple and predictable regardless of that
+        // setting. No-ops (no wasted renders) when nothing is pulsing.
+        this._pulsingBillboards = [];
+        const pulseLoop = () => {
+            if (this._pulsingBillboards.length) {
+                const t = performance.now() / 450;
+                this._pulsingBillboards.forEach((p) => {
+                    if (!p.billboard) return;
+                    p.billboard.scale = p.baseScale * (1 + 0.22 * Math.sin(t + p.phase));
+                });
+                this.viewer.scene.requestRender();
+            }
+            requestAnimationFrame(pulseLoop);
+        };
+        requestAnimationFrame(pulseLoop);
+
         // Atmospheric Synchronization Engine (ASE)
         this.weather = new WeatherManager(this.viewer);
         
@@ -410,7 +438,10 @@ class GlobeManager {
             AppState.setLayerActive('layer-temp', e.target.checked);
             this.toggleEnvironmentalLayer(e.target.checked, 'temperature');
         });
-        document.getElementById('layer-ndvi').addEventListener('change', (e) => this.toggleEnvironmentalLayer(e.target.checked, 'ndvi'));
+        document.getElementById('layer-ndvi').addEventListener('change', (e) => {
+            AppState.setLayerActive('layer-ndvi', e.target.checked);
+            this.toggleEnvironmentalLayer(e.target.checked, 'ndvi');
+        });
         document.getElementById('layer-rainfall').addEventListener('change', (e) => {
             AppState.setLayerActive('layer-rainfall', e.target.checked);
             this.toggleEnvironmentalLayer(e.target.checked, 'rainfall');
@@ -422,6 +453,10 @@ class GlobeManager {
         document.getElementById('layer-sensors').addEventListener('change', (e) => {
             AppState.setLayerActive('layer-sensors', e.target.checked);
             this.toggleSensors(e.target.checked);
+        });
+        document.getElementById('layer-wind').addEventListener('change', (e) => {
+            AppState.setLayerActive('layer-wind', e.target.checked);
+            this.toggleWindLayer(e.target.checked);
         });
 
         // Time Slider Integration.
@@ -697,6 +732,7 @@ class GlobeManager {
         if (data.type === 'wildfire') {
             html += `
                 <p><strong>FRP:</strong> ${data.frp.toFixed(1)} MW</p>
+                <p><strong>Severity:</strong> ${data.tier ? data.tier.charAt(0).toUpperCase() + data.tier.slice(1) : 'N/A'}</p>
                 <p><strong>Date:</strong> ${data.acq_date}</p>
                 <p><strong>Conf:</strong> ${data.confidence}%</p>
             `;
@@ -704,12 +740,27 @@ class GlobeManager {
             html += `<p><strong>NDVI Index:</strong> ${data.value.toFixed(3)}</p>`;
         } else if (data.type === 'climate') {
             html += `<p><strong>Temp Anomaly:</strong> ${data.value.toFixed(2)}°C</p>`;
+        } else if (data.type === 'wind') {
+            html += `
+                <p><strong>Speed:</strong> ${data.speed_kmh.toFixed(1)} km/h</p>
+                <p><strong>Direction:</strong> from ${data.direction_deg.toFixed(0)}°</p>
+            `;
         }
         
+        // Points are gone from most layers now (billboards/rectangles/
+        // cylinders instead — see toggleWildfires/toggleEnvironmentalLayer/
+        // toggleSensors), so this checks all three shapes rather than
+        // only entity.point, which would otherwise fall back to the
+        // default color for almost everything.
+        let popupColor = '#38bdf8';
+        if (entity.point) popupColor = entity.point.color.getValue().toCssColorString();
+        else if (entity.rectangle) popupColor = entity.rectangle.material.getValue().color.toCssColorString();
+        else if (entity.cylinder) popupColor = entity.cylinder.material.getValue().color.toCssColorString();
+
         ui.showSensorPopup(entity.id, {
             name: `${data.type.charAt(0).toUpperCase() + data.type.slice(1)} Insight`,
             details: data,
-            color: entity.point ? entity.point.color.getValue().toCssColorString() : '#38bdf8'
+            color: popupColor
         });
     }
 
@@ -724,7 +775,34 @@ class GlobeManager {
                     if (e.point) {
                         e.point.scaleByDistance = new Cesium.NearFarScalar(1.5e2, 2.0, 1.5e7, 0.5);
                     }
+                    if (e.billboard) {
+                        e.billboard.scaleByDistance = new Cesium.NearFarScalar(1.5e2, 1.4, 1.5e7, 0.4);
+                    }
                 });
+            }
+        });
+
+        // AQI extruded columns live in this.layers.sensors, a plain
+        // entity array rather than a DataSource (see toggleSensors), and
+        // CylinderGraphics has no built-in scaleByDistance the way
+        // points/billboards do — so height/radius are scaled manually
+        // here from each column's stored base dimensions. Without this,
+        // the "3D bar chart" columns would stay full height even zoomed
+        // out to a whole-continent view, burying the globe under a
+        // forest of skyscrapers instead of reading as a subtle severity
+        // cue the way they're meant to at that distance.
+        const columnScale = height > 6000000 ? 0.32 : height > 1500000 ? 0.6 : 1.0;
+        this.layers.sensors.forEach((e) => {
+            const data = e._customData;
+            if (!data || !data.baseHeightM) return;
+            const h = data.baseHeightM * columnScale;
+            if (e.cylinder) {
+                e.cylinder.length = h;
+                e.cylinder.topRadius = data.baseRadiusM * columnScale;
+                e.cylinder.bottomRadius = data.baseRadiusM * columnScale;
+                e.position = Cesium.Cartesian3.fromDegrees(data.lon, data.lat, h / 2);
+            } else if (e.billboard) {
+                e.position = Cesium.Cartesian3.fromDegrees(data.lon, data.lat, h);
             }
         });
     }
@@ -791,6 +869,10 @@ class GlobeManager {
                 this.viewer.dataSources.remove(this.layers.wildfires);
                 this.layers.wildfires = null;
             }
+            // Drop any pulsing entries this layer registered — otherwise
+            // toggling wildfires off/on repeatedly leaks stale billboard
+            // references into the shared pulse loop.
+            this._pulsingBillboards = this._pulsingBillboards.filter((p) => p.layer !== 'wildfires');
             return;
         }
 
@@ -817,37 +899,59 @@ class GlobeManager {
             for (let i = 0; i < entities.length; i++) {
                 const entity = entities[i];
                 const frp = entity.properties.frp ? entity.properties.frp.getValue() : 10;
-                
+
                 // 5-tier severity spectrum by Fire Radiative Power (MW),
                 // not just 3 buckets — low-intensity detections (the
                 // majority of real ones) now read distinctly from
                 // moderate/high/severe/extreme instead of collapsing into
                 // one "yellow" bucket.
-                let color;
-                if (frp <= 10) color = Cesium.Color.fromCssColorString('#eab308');   // Low
-                else if (frp <= 40) color = Cesium.Color.fromCssColorString('#f97316'); // Moderate
-                else if (frp <= 100) color = Cesium.Color.fromCssColorString('#ef4444'); // High
-                else if (frp <= 300) color = Cesium.Color.fromCssColorString('#b91c1c'); // Severe
-                else color = Cesium.Color.fromCssColorString('#7f1d1d');                 // Extreme
+                let colorHex, tier;
+                if (frp <= 10) { colorHex = '#f5b942'; tier = 'low'; }
+                else if (frp <= 40) { colorHex = '#f2792e'; tier = 'moderate'; }
+                else if (frp <= 100) { colorHex = '#e6432c'; tier = 'high'; }
+                else if (frp <= 300) { colorHex = '#b31f1f'; tier = 'severe'; }
+                else { colorHex = '#6e0f0f'; tier = 'extreme'; }
 
-                entity.point = {
-                    pixelSize: Math.min(12, 6 + frp/50),
-                    color: color.withAlpha(0.8),
-                    outlineColor: Cesium.Color.BLACK,
-                    outlineWidth: 1,
+                // Glyph size scales gently with FRP within its tier —
+                // magnitude still reads through size, same as before,
+                // but now on a recognizable flame icon with a glow halo
+                // instead of a flat colored circle.
+                const glyphSize = Math.round(Math.min(40, 22 + frp / 45));
+                const canvas = this._getGlyphCanvas(`fire-${colorHex}-${glyphSize}`,
+                    () => this._createFlameGlyphCanvas(colorHex, glyphSize));
+
+                entity.point = undefined;
+                entity.billboard = {
+                    image: canvas,
+                    scale: 1,
+                    verticalOrigin: Cesium.VerticalOrigin.BOTTOM,
                     heightReference: Cesium.HeightReference.CLAMP_TO_GROUND,
-                    disableDepthTestDistance: Number.POSITIVE_INFINITY 
+                    disableDepthTestDistance: Number.POSITIVE_INFINITY,
                 };
-                
+
                 // Add custom data for tooltips
                 entity._customData = {
                     type: 'wildfire',
                     frp: frp,
+                    tier,
                     acq_date: entity.properties.acq_date ? entity.properties.acq_date.getValue() : 'N/A',
                     confidence: entity.properties.confidence ? entity.properties.confidence.getValue() : 0,
                     lat: Cesium.Math.toDegrees(Cesium.Cartographic.fromCartesian(entity.position.getValue()).latitude),
                     lon: Cesium.Math.toDegrees(Cesium.Cartographic.fromCartesian(entity.position.getValue()).longitude)
                 };
+
+                // Only the two most urgent tiers pulse — motion stays
+                // reserved for things that actually warrant attention,
+                // rather than every single fire on the map breathing at
+                // once (which would just read as visual noise).
+                if (tier === 'severe' || tier === 'extreme') {
+                    this._pulsingBillboards.push({
+                        billboard: entity.billboard,
+                        baseScale: 1,
+                        phase: Math.random() * Math.PI * 2,
+                        layer: 'wildfires',
+                    });
+                }
             }
             
             // NASA-style clustering
@@ -880,6 +984,108 @@ class GlobeManager {
         ctx.strokeStyle = '#fff'; ctx.lineWidth = 2; ctx.stroke();
         ctx.fillStyle = '#fff'; ctx.font = 'bold 10px Inter'; ctx.textAlign = 'center';
         ctx.fillText(count > 99 ? '99+' : count, 16, 20);
+        return canvas;
+    }
+
+    // Cache + retrieve a generated glyph canvas by key, so a given
+    // color/size combination is only ever drawn once (see this._glyphCache
+    // in the constructor).
+    _getGlyphCanvas(key, drawFn) {
+        if (!this._glyphCache[key]) {
+            this._glyphCache[key] = drawFn();
+        }
+        return this._glyphCache[key];
+    }
+
+    // Soft radial glow behind a solid ringed core — the shared "real
+    // point sensor" glyph used for AQI station tops and any other
+    // single-value point marker. A plain Cesium PointGraphics can't glow
+    // on its own (no blur/shadow support), so this bakes the glow into
+    // the billboard image itself instead.
+    _createGlowDotCanvas(hexColor, coreRadius = 5, glowRadius = 14) {
+        const size = glowRadius * 2;
+        const canvas = document.createElement('canvas');
+        canvas.width = size; canvas.height = size;
+        const ctx = canvas.getContext('2d');
+        const cx = size / 2, cy = size / 2;
+
+        const glow = ctx.createRadialGradient(cx, cy, 0, cx, cy, glowRadius);
+        glow.addColorStop(0, hexColor + 'aa');
+        glow.addColorStop(1, hexColor + '00');
+        ctx.fillStyle = glow;
+        ctx.fillRect(0, 0, size, size);
+
+        ctx.beginPath();
+        ctx.arc(cx, cy, coreRadius, 0, Math.PI * 2);
+        ctx.fillStyle = hexColor;
+        ctx.fill();
+        ctx.lineWidth = 1.5;
+        ctx.strokeStyle = 'rgba(255,255,255,0.75)';
+        ctx.stroke();
+
+        return canvas;
+    }
+
+    // Stylized flame glyph for wildfire points, with the same glow-halo
+    // treatment as the AQI dot so both "real point event" layers share
+    // one visual grammar instead of two unrelated dot styles. A
+    // recognizable icon reads faster at a glance than an abstract
+    // colored circle for something as identifiable as fire.
+    _createFlameGlyphCanvas(hexColor, size = 28) {
+        const canvas = document.createElement('canvas');
+        canvas.width = size; canvas.height = size;
+        const ctx = canvas.getContext('2d');
+        const cx = size / 2;
+
+        const glow = ctx.createRadialGradient(cx, size * 0.6, 0, cx, size * 0.6, size / 1.7);
+        glow.addColorStop(0, hexColor + '99');
+        glow.addColorStop(1, hexColor + '00');
+        ctx.fillStyle = glow;
+        ctx.fillRect(0, 0, size, size);
+
+        ctx.save();
+        const s = size / 28;
+        ctx.translate(cx, size * 0.82);
+        ctx.scale(s, s);
+        ctx.beginPath();
+        ctx.moveTo(0, -22);
+        ctx.bezierCurveTo(7, -14, 9, -6, 5, 0);
+        ctx.bezierCurveTo(9, -2, 11, 4, 6, 9);
+        ctx.bezierCurveTo(8, 6, 7, 2, 4, 3);
+        ctx.bezierCurveTo(5, 8, 0, 12, -3, 9);
+        ctx.bezierCurveTo(-7, 6, -6, 1, -3, -1);
+        ctx.bezierCurveTo(-6, -6, -5, -13, 0, -22);
+        ctx.closePath();
+        ctx.fillStyle = hexColor;
+        ctx.fill();
+        ctx.restore();
+
+        return canvas;
+    }
+
+    // Directional arrow for the wind layer. Drawn pointing "up" (screen
+    // north) once per speed tier; per-entity direction is applied via
+    // Cesium's billboard.rotation at render time, not baked into the
+    // canvas, so this stays in the small cache like every other glyph.
+    _createWindArrowCanvas(hexColor, size = 20) {
+        const canvas = document.createElement('canvas');
+        canvas.width = size; canvas.height = size;
+        const ctx = canvas.getContext('2d');
+        const cx = size / 2;
+        ctx.strokeStyle = hexColor;
+        ctx.fillStyle = hexColor;
+        ctx.lineWidth = Math.max(1.5, size / 12);
+        ctx.lineCap = 'round';
+        ctx.beginPath();
+        ctx.moveTo(cx, size * 0.88);
+        ctx.lineTo(cx, size * 0.22);
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.moveTo(cx, size * 0.02);
+        ctx.lineTo(cx - size * 0.24, size * 0.36);
+        ctx.lineTo(cx + size * 0.24, size * 0.36);
+        ctx.closePath();
+        ctx.fill();
         return canvas;
     }
 
@@ -929,45 +1135,84 @@ class GlobeManager {
         try {
             const dataSource = await Cesium.GeoJsonDataSource.load(data, { clampToGround: true });
             const entities = dataSource.entities.values;
+
+            // Half-width of each grid cell, in degrees — matches the
+            // backend's sampling step per layer (modis_ndvi.py's
+            // vegetation grid steps every 10°; climate.py's shared grid
+            // conditions fetch — used by temperature/rainfall/weather —
+            // steps every 20°). Rendering a filled cell at this size
+            // instead of a small dot is what actually fixes the
+            // "continuous field shown as scattered dots" problem: these
+            // are gridded field samples, not discrete point events, so
+            // they should read as a continuous shaded surface, not a
+            // sparse scatter plot.
+            const halfStepDeg = type === 'ndvi' ? 5 : 10;
+
             for (let i = 0; i < entities.length; i++) {
                 const entity = entities[i];
                 const val = entity.properties.value ? entity.properties.value.getValue() : 0;
+                const pointSource = entity.properties.data_source ? entity.properties.data_source.getValue() : null;
 
-                let color;
+                let colorHex;
                 if (type === 'ndvi') {
                     // Sparse (brown) -> mid (yellow-green) -> dense (dark green)
-                    if (val < 0.2) color = Cesium.Color.fromCssColorString('#a16207');
-                    else if (val < 0.5) color = Cesium.Color.fromCssColorString('#84cc16');
-                    else color = Cesium.Color.fromCssColorString('#14532d');
+                    if (val < 0.2) colorHex = '#a16207';
+                    else if (val < 0.5) colorHex = '#84cc16';
+                    else colorHex = '#14532d';
                 } else if (type === 'temperature') {
-                    // Blue -> Yellow -> Red (Anomaly)
-                    if (val < 0) color = Cesium.Color.BLUE;
-                    else if (val < 1.0) color = Cesium.Color.YELLOW;
-                    else color = Cesium.Color.RED;
+                    // Cool -> mid -> hot (anomaly), custom hex matching
+                    // the rest of the app's palette instead of raw named
+                    // Cesium colors (Color.BLUE/YELLOW/RED), which read
+                    // as harsh/generic next to every other layer's
+                    // deliberately chosen hues.
+                    if (val < 0) colorHex = '#2c6f8e';
+                    else if (val < 1.0) colorHex = '#d8b23a';
+                    else colorHex = '#a12c2c';
                 } else if (type === 'rainfall') {
                     // Dry -> light rain -> heavy rain (mm in the last hour)
-                    if (val <= 0) color = Cesium.Color.fromCssColorString('#78716c'); // Dry
-                    else if (val < 2.5) color = Cesium.Color.fromCssColorString('#7dd3fc'); // Light
-                    else if (val < 10) color = Cesium.Color.fromCssColorString('#0ea5e9'); // Moderate
-                    else color = Cesium.Color.fromCssColorString('#1e3a8a'); // Heavy
+                    if (val <= 0) colorHex = '#78716c'; // Dry
+                    else if (val < 2.5) colorHex = '#7dd3fc'; // Light
+                    else if (val < 10) colorHex = '#0ea5e9'; // Moderate
+                    else colorHex = '#1e3a8a'; // Heavy
                 } else {
                     // Weather conditions: cloud cover %, clear -> overcast
-                    if (val < 25) color = Cesium.Color.fromCssColorString('#fde047'); // Clear
-                    else if (val < 60) color = Cesium.Color.fromCssColorString('#cbd5e1'); // Partly cloudy
-                    else color = Cesium.Color.fromCssColorString('#64748b'); // Overcast
+                    if (val < 25) colorHex = '#fde047'; // Clear
+                    else if (val < 60) colorHex = '#cbd5e1'; // Partly cloudy
+                    else colorHex = '#64748b'; // Overcast
                 }
 
-                entity.point = {
-                    pixelSize: 6,
-                    color: color.withAlpha(0.7),
-                    heightReference: Cesium.HeightReference.CLAMP_TO_GROUND
+                const cartographic = Cesium.Cartographic.fromCartesian(entity.position.getValue());
+                const lat = Cesium.Math.toDegrees(cartographic.latitude);
+                const lon = Cesium.Math.toDegrees(cartographic.longitude);
+
+                // A fallback/estimated sample (currently only possible on
+                // the NDVI grid — see modis_ndvi.py's real_modis vs.
+                // estimated_fallback split) renders at reduced opacity
+                // rather than a dashed outline (Cesium rectangle outlines
+                // don't support dash patterns) — dimmer visually reads as
+                // "less certain," consistent with the LIVE/EST badge
+                // language used in the side panels.
+                const isEstimated = pointSource && pointSource !== 'real_modis' && pointSource !== 'real_openmeteo';
+                const fillAlpha = isEstimated ? 0.18 : 0.42;
+
+                entity.point = undefined;
+                entity.rectangle = {
+                    coordinates: Cesium.Rectangle.fromDegrees(
+                        lon - halfStepDeg, lat - halfStepDeg,
+                        lon + halfStepDeg, lat + halfStepDeg
+                    ),
+                    material: Cesium.Color.fromCssColorString(colorHex).withAlpha(fillAlpha),
+                    outline: true,
+                    outlineColor: Cesium.Color.fromCssColorString('#94a3b8').withAlpha(0.18),
+                    outlineWidth: 1,
+                    heightReference: Cesium.HeightReference.CLAMP_TO_GROUND,
                 };
-                
+
                 entity._customData = {
                     type: label,
                     value: val,
-                    lat: Cesium.Math.toDegrees(Cesium.Cartographic.fromCartesian(entity.position.getValue()).latitude),
-                    lon: Cesium.Math.toDegrees(Cesium.Cartographic.fromCartesian(entity.position.getValue()).longitude)
+                    dataSource: pointSource,
+                    lat, lon,
                 };
             }
 
@@ -1026,17 +1271,19 @@ class GlobeManager {
              // Intensify Temperature Layer
              if (this.layers.temperature) {
                  this.layers.temperature.entities.values.forEach(entity => {
-                     if (entity.point) {
+                     if (entity.rectangle) {
                          const base = entity._customData.value;
                          const current = base + tempOffset;
-                         
-                         let color = Cesium.Color.BLUE;
-                         if (current > 1.5) color = Cesium.Color.RED;
-                         else if (current > 0.5) color = Cesium.Color.ORANGE;
-                         else if (current > 0) color = Cesium.Color.YELLOW;
-                         
-                         entity.point.color = color.withAlpha(0.7);
-                         entity.point.pixelSize = 6 + (current * 4);
+
+                         // Same custom-hex palette as toggleEnvironmentalLayer's
+                         // normal render — kept in sync so a running "what-if"
+                         // simulation doesn't visually diverge from the app's
+                         // regular temperature colors.
+                         let colorHex = '#2c6f8e';
+                         if (current > 1.0) colorHex = '#a12c2c';
+                         else if (current > 0) colorHex = '#d8b23a';
+
+                         entity.rectangle.material = Cesium.Color.fromCssColorString(colorHex).withAlpha(0.42);
                      }
                  });
              }
@@ -1044,16 +1291,16 @@ class GlobeManager {
              // Intensify NDVI Layer
              if (this.layers.ndvi) {
                  this.layers.ndvi.entities.values.forEach(entity => {
-                     if (entity.point) {
+                     if (entity.rectangle) {
                          const base = entity._customData.value;
                          const factor = 1.0 + (rainOffset / 100);
                          const current = base * factor;
 
-                         let color = Cesium.Color.fromCssColorString('#14532d');
-                         if (current < 0.2) color = Cesium.Color.fromCssColorString('#a16207');
-                         else if (current < 0.5) color = Cesium.Color.fromCssColorString('#84cc16');
-                         
-                         entity.point.color = color.withAlpha(0.7);
+                         let colorHex = '#14532d';
+                         if (current < 0.2) colorHex = '#a16207';
+                         else if (current < 0.5) colorHex = '#84cc16';
+
+                         entity.rectangle.material = Cesium.Color.fromCssColorString(colorHex).withAlpha(0.42);
                      }
                  });
              }
@@ -1094,30 +1341,59 @@ class GlobeManager {
             // Standard EPA PM2.5 AQI color spectrum (6 tiers) rather than a
             // coarse 3-bucket split — this is the actual "full color
             // gradient/severity scale" the toggle should show.
-            let color;
-            if (pmValue <= 12) color = Cesium.Color.fromCssColorString('#22c55e');      // Good
-            else if (pmValue <= 35.4) color = Cesium.Color.fromCssColorString('#eab308'); // Moderate
-            else if (pmValue <= 55.4) color = Cesium.Color.fromCssColorString('#f97316'); // Unhealthy (sensitive)
-            else if (pmValue <= 150.4) color = Cesium.Color.fromCssColorString('#ef4444'); // Unhealthy
-            else if (pmValue <= 250.4) color = Cesium.Color.fromCssColorString('#a855f7'); // Very Unhealthy
-            else color = Cesium.Color.fromCssColorString('#7f1d1d');                       // Hazardous
+            let colorHex;
+            if (pmValue <= 12) colorHex = '#22c55e';        // Good
+            else if (pmValue <= 35.4) colorHex = '#eab308'; // Moderate
+            else if (pmValue <= 55.4) colorHex = '#f97316'; // Unhealthy (sensitive)
+            else if (pmValue <= 150.4) colorHex = '#ef4444'; // Unhealthy
+            else if (pmValue <= 250.4) colorHex = '#a855f7'; // Very Unhealthy
+            else colorHex = '#7f1d1d';                       // Hazardous
+            const color = Cesium.Color.fromCssColorString(colorHex);
 
-            const entity = this.viewer.entities.add({
-                position: Cesium.Cartesian3.fromDegrees(s.coordinates.longitude, s.coordinates.latitude),
-                point: {
-                    pixelSize: 6,
-                    color: color,
-                    outlineColor: Cesium.Color.BLACK,
+            // Extruded column: severity reads as HEIGHT, not just color —
+            // a real "3D bar chart on the globe" rather than a flat dot.
+            // This reads best zoomed into a city/region (a whole-Earth
+            // view of every station as a skyscraper would just be
+            // clutter) — see applyLOD() for the distance-based scale-down
+            // that keeps this reasonable at high camera altitude.
+            const severityFrac = Math.min(1, pmValue / 250.4);
+            const baseHeightM = 24000 + severityFrac * 210000;
+            const baseRadiusM = 9000;
+
+            const column = this.viewer.entities.add({
+                position: Cesium.Cartesian3.fromDegrees(s.coordinates.longitude, s.coordinates.latitude, baseHeightM / 2),
+                cylinder: {
+                    length: baseHeightM,
+                    topRadius: baseRadiusM,
+                    bottomRadius: baseRadiusM,
+                    material: color.withAlpha(0.55),
+                    outline: true,
+                    outlineColor: color,
                     outlineWidth: 1,
-                    heightReference: Cesium.HeightReference.CLAMP_TO_GROUND
-                }
+                },
             });
 
-            entity._customData = {
+            // The actual clickable "station" marker sits at the column's
+            // top — same glow-dot glyph language used for wildfires/AQI
+            // elsewhere, so every real point-sensor reads consistently.
+            const glowCanvas = this._getGlyphCanvas(`aqi-${colorHex}`,
+                () => this._createGlowDotCanvas(colorHex, 4, 11));
+            const cap = this.viewer.entities.add({
+                position: Cesium.Cartesian3.fromDegrees(s.coordinates.longitude, s.coordinates.latitude, baseHeightM),
+                billboard: {
+                    image: glowCanvas,
+                    verticalOrigin: Cesium.VerticalOrigin.CENTER,
+                    disableDepthTestDistance: Number.POSITIVE_INFINITY,
+                },
+            });
+
+            const customData = {
                 type: 'air_quality_station',
                 name: s.name || "Station",
                 lat: s.coordinates.latitude,
                 lon: s.coordinates.longitude,
+                baseHeightM,
+                baseRadiusM,
                 details: {
                     "Country": s.country || "Unknown",
                     "City": s.city || "Unknown",
@@ -1125,12 +1401,82 @@ class GlobeManager {
                     "Status": "Online"
                 }
             };
+            // Both the column body and its top marker carry the same
+            // data — clicking either one shows the same station info.
+            column._customData = customData;
+            cap._customData = customData;
 
-            this.layers.sensors.push(entity);
+            this.layers.sensors.push(column, cap);
         });
 
         this.viewer.entities.resumeEvents();
         this.viewer.scene.requestRender();
+    }
+
+    async toggleWindLayer(visible) {
+        if (!visible) {
+            if (this.layers.wind) {
+                this.viewer.dataSources.remove(this.layers.wind);
+                this.layers.wind = null;
+            }
+            return;
+        }
+
+        const data = await api.getWind();
+        if (!data || !data.features || data.features.length === 0) {
+            const message = api.lastErrorKind === 'network'
+                ? `Could not reach the backend — check that the FastAPI server is running and reachable at ${CONFIG.API_BASE_URL}.`
+                : `The backend is running, but couldn't get real wind data from Open-Meteo right now — try again in a minute.`;
+            document.dispatchEvent(new CustomEvent('layerNotice', { detail: { message } }));
+            return;
+        }
+
+        try {
+            const dataSource = await Cesium.GeoJsonDataSource.load(data, { clampToGround: true });
+            const entities = dataSource.entities.values;
+
+            for (let i = 0; i < entities.length; i++) {
+                const entity = entities[i];
+                const speed = entity.properties.speed_kmh ? entity.properties.speed_kmh.getValue() : 0;
+                const direction = entity.properties.direction_deg ? entity.properties.direction_deg.getValue() : 0;
+
+                let colorHex, size;
+                if (speed < 10) { colorHex = '#7dd3fc'; size = 14; }       // Calm
+                else if (speed < 25) { colorHex = '#38bdf8'; size = 18; }  // Moderate
+                else if (speed < 45) { colorHex = '#e8c547'; size = 22; }  // Strong
+                else { colorHex = '#e6432c'; size = 26; }                  // Severe
+
+                const canvas = this._getGlyphCanvas(`wind-${colorHex}-${size}`,
+                    () => this._createWindArrowCanvas(colorHex, size));
+
+                // direction_deg is the direction wind blows FROM (standard
+                // meteorological convention — see climate.py's
+                // get_wind_geojson docstring). Arrows here point where the
+                // wind is blowing TOWARD (direction + 180), which reads
+                // more intuitively as a flow indicator. This is a
+                // simplified north-up rotation, not a true 3D-globe vector
+                // alignment — adequate for the zoom levels this layer is
+                // meant to be viewed at, not claimed to be more precise
+                // than that.
+                const towardBearing = (direction + 180) % 360;
+
+                entity.point = undefined;
+                entity.billboard = {
+                    image: canvas,
+                    rotation: Cesium.Math.toRadians(-towardBearing),
+                    heightReference: Cesium.HeightReference.CLAMP_TO_GROUND,
+                    disableDepthTestDistance: Number.POSITIVE_INFINITY,
+                };
+
+                entity._customData = { type: 'wind', speed_kmh: speed, direction_deg: direction };
+            }
+
+            this.viewer.dataSources.add(dataSource);
+            this.layers.wind = dataSource;
+            this.viewer.scene.requestRender();
+        } catch (e) {
+            console.error("Wind layer load error:", e);
+        }
     }
 
     async renderGlobalShiHeatmap(countries) {

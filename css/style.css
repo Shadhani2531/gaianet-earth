@@ -1,8 +1,14 @@
 /* Color Palette & Variables - Phase 3 Digital Twin */
 :root {
-    --bg-dark: #07090d;
-    --panel-bg: rgba(11, 14, 20, 0.4);
-    --panel-border: rgba(255, 255, 255, 0.15);
+    /* NASA-instrument pass: darkened from the previous mid-gray glass
+       toward true near-black — low ambient light lets data, not chrome,
+       be the brightest thing on screen. Panel background dropped its
+       blue-gray cast and increased opacity slightly so panels read as
+       an instrument surface rather than frosted consumer-app glass. */
+    --bg-dark: #05070a;
+    --panel-bg: rgba(8, 10, 14, 0.62);
+    --panel-border: rgba(148, 163, 184, 0.18);
+    --panel-border-strong: rgba(148, 163, 184, 0.4);
     --text-primary: #ffffff;
     --text-secondary: #94a3b8;
     --text-muted: #64748b;
@@ -11,7 +17,11 @@
     --warning-amber: #FFB800;
     --danger: #ef4444;
     --success: #22c55e;
-    --glass-blur: blur(20px) saturate(180%);
+    --font-mono: 'JetBrains Mono', 'SF Mono', Consolas, monospace;
+    /* Lighter blur than before — heavy frosted-glass blur is a
+       "consumer app" signal; a thinner blur keeps panels legible over
+       the globe without softening the whole UI into glass. */
+    --glass-blur: blur(10px) saturate(140%);
     --shimmer-edge: 1px solid rgba(255, 255, 255, 0.2);
 }
 
@@ -44,9 +54,53 @@ h1, h2, h3, h4 {
     backdrop-filter: var(--glass-blur);
     -webkit-backdrop-filter: var(--glass-blur);
     border: var(--panel-border);
-    border-radius: 24px;
+    /* Sharp corners instead of the previous 24px rounding — rounded
+       glass reads as "consumer app"; a near-square panel with small
+       corner-bracket accents (below) reads as "instrument." */
+    border-radius: 6px;
     box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.3);
     transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    position: relative;
+}
+
+/* Corner-bracket framing — a small L-shaped accent at two opposite
+   corners, the classic HUD/instrument-panel framing device (flight
+   displays, mission-control screens). Deliberately scoped to the
+   rectangular content panels only (left/right panels, insight card,
+   sensor popup, Gaia chat) — NOT the base .glass-panel class, since
+   that's shared with pill-shaped chrome (.top-nav, .sidebar-tabs,
+   .floating-controller, .bottom-panel) whose own border-radius rules
+   round them into bars/pills where a square corner bracket would sit
+   visibly detached from the actual rounded edge. */
+.left-panel, .right-panel, .insight-card, .sensor-popup, .gaia-panel {
+    position: relative;
+}
+.left-panel::before, .left-panel::after,
+.right-panel::before, .right-panel::after,
+.insight-card::before, .insight-card::after,
+.sensor-popup::before, .sensor-popup::after,
+.gaia-panel::before, .gaia-panel::after {
+    content: "";
+    position: absolute;
+    width: 12px;
+    height: 12px;
+    pointer-events: none;
+    opacity: 0.7;
+    z-index: 2;
+}
+.left-panel::before, .right-panel::before, .insight-card::before,
+.sensor-popup::before, .gaia-panel::before {
+    top: -1px;
+    left: -1px;
+    border-top: 1px solid var(--panel-border-strong);
+    border-left: 1px solid var(--panel-border-strong);
+}
+.left-panel::after, .right-panel::after, .insight-card::after,
+.sensor-popup::after, .gaia-panel::after {
+    bottom: -1px;
+    right: -1px;
+    border-bottom: 1px solid var(--panel-border-strong);
+    border-right: 1px solid var(--panel-border-strong);
 }
 
 .shimmer-edge {
@@ -621,8 +675,10 @@ input:checked ~ .label-text i {
     color: var(--text-secondary);
 }
 
+/* Monospace for the actual number (NASA-instrument telemetry pass) —
+   keeps 'Outfit' only for the risk-tier word label below it, if any. */
 .shi-compare-value {
-    font-family: 'Outfit', sans-serif;
+    font-family: var(--font-mono);
     font-size: 2rem;
     font-weight: 700;
     color: var(--accent-color);
@@ -802,7 +858,7 @@ input:checked ~ .label-text i {
 }
 
 .change-row-delta {
-    font-family: 'Outfit', sans-serif;
+    font-family: var(--font-mono);
     font-weight: 700;
     font-size: 0.9rem;
 }
@@ -820,6 +876,24 @@ input:checked ~ .label-text i {
     margin-right: 6px;
     font-weight: 600;
 }
+
+/* A quick-scan certainty indicator alongside the text label — three
+   dots, filled left-to-right by how directly each confidence tier is
+   grounded in a real citation (measured = most direct, modeled = least).
+   This is a visual read of scenario_engine.py's own three-tier
+   definition, not a numeric error bar — the underlying data doesn't
+   carry a quantified uncertainty range, so this deliberately doesn't
+   pretend to be one. */
+.confidence-badge::before {
+    content: "●○○";
+    margin-right: 4px;
+    letter-spacing: 1px;
+    font-size: 0.55rem;
+}
+
+.confidence-badge.measured::before { content: "●●●"; }
+.confidence-badge.estimated::before { content: "●●○"; }
+.confidence-badge.modeled::before { content: "●○○"; }
 
 .confidence-badge.measured {
     background: rgba(34, 197, 94, 0.15);
@@ -989,8 +1063,55 @@ input:checked ~ .label-text i {
 .stat-value {
     font-size: 1.5rem;
     font-weight: 700;
-    font-family: 'Outfit', sans-serif;
+    font-family: var(--font-mono);
     color: var(--accent-color);
+}
+
+/* Data-source badges (LIVE / EST / FORMULA) — see ui.js's
+   _dataSourceBadge()/_setStatBadge(). The backend has always returned a
+   data_source/confidence field on nearly every response; this is the
+   first place that information is actually shown to the person, rather
+   than only ever reaching the browser's network tab. */
+.data-source-badge {
+    display: inline-block;
+    font-family: var(--font-mono);
+    font-size: 0.55rem;
+    font-weight: 700;
+    letter-spacing: 0.5px;
+    padding: 1px 6px;
+    border-radius: 8px;
+    text-transform: uppercase;
+    vertical-align: middle;
+    cursor: help;
+}
+
+.data-source-badge.live {
+    background: rgba(34, 197, 94, 0.15);
+    color: var(--success);
+    border: 1px solid rgba(34, 197, 94, 0.3);
+}
+
+.data-source-badge.estimated {
+    background: rgba(255, 184, 0, 0.15);
+    color: var(--warning-amber);
+    border: 1px solid rgba(255, 184, 0, 0.3);
+}
+
+.data-source-badge.formula {
+    background: rgba(148, 163, 184, 0.15);
+    color: var(--text-secondary);
+    border: 1px solid rgba(148, 163, 184, 0.3);
+}
+
+/* .stat-card is a column flexbox, so the badge lands as its own row
+   directly under the number; .data-node's value is inline, so the badge
+   sits beside it instead — same component, two layout contexts. */
+.stat-card .data-source-badge {
+    margin-top: 2px;
+}
+
+.data-node .data-source-badge {
+    margin-left: 6px;
 }
 
 /* Used in 13+ places across index.html/ui.js as className="text-secondary
@@ -1053,6 +1174,7 @@ input:checked ~ .label-text i {
 }
 
 .forecast-day-temp {
+    font-family: var(--font-mono);
     font-size: 0.8rem;
     font-weight: 600;
     white-space: nowrap;
@@ -1252,7 +1374,7 @@ body.minimal-mode #minimal-toggle {
 }
 
 .insight-shi-value {
-    font-family: 'Outfit', sans-serif;
+    font-family: var(--font-mono);
     font-size: 2.2rem;
     font-weight: 700;
     color: var(--accent-color);
@@ -1310,6 +1432,7 @@ body.minimal-mode #minimal-toggle {
 }
 
 .data-node .value {
+    font-family: var(--font-mono);
     font-size: 1.2rem;
     font-weight: 700;
     color: var(--accent-color);
@@ -1845,6 +1968,7 @@ input[type="range"].timeline-slider::-webkit-slider-thumb:hover {
 }
 
 .shi-value {
+    font-family: var(--font-mono);
     font-size: 2.2rem;
     font-weight: 700;
     color: var(--accent-color);
@@ -2308,6 +2432,128 @@ input[type="range"].timeline-slider::-webkit-slider-thumb:hover {
     flex-shrink: 0;
 }
 
+/* =========================================================================
+   MINIMUM-VIABLE RESPONSIVE LAYOUT (≤768px)
+   -------------------------------------------------------------------------
+   Before this block, the entire dashboard had exactly one media query
+   (the Gaia chat-panel rule below), scoped to a single width tweak — the
+   primary layout (side panels, tab dock, insight card, timeline strip)
+   had no mobile treatment at all and was effectively unusable below
+   tablet width. This isn't a full mobile redesign (that's a bigger,
+   separate effort — see PROJECT_PHASES.md), it's a floor: every panel
+   becomes reachable and readable, using the well-established "map +
+   bottom sheet + bottom nav" pattern instead of the fixed-sidebar
+   desktop layout.
+   ========================================================================= */
+@media (max-width: 768px) {
+    .top-nav {
+        left: 12px;
+        right: 12px;
+        height: 52px;
+        padding: 0 1rem;
+        border-radius: 20px;
+    }
+
+    .logo h1 { font-size: 1.1rem; }
+    .logo .subtitle { display: none; } /* first thing to drop for space */
+
+    /* Tab dock: vertical pill on the left -> horizontal bar pinned to
+       the bottom, the standard mobile-nav position users already expect
+       (same pattern as most map apps). */
+    .sidebar-tabs {
+        left: 0;
+        right: 0;
+        top: auto;
+        bottom: 0;
+        transform: none;
+        width: 100%;
+        height: 64px;
+        flex-direction: row;
+        justify-content: space-evenly;
+        align-items: center;
+        border-radius: 20px 20px 0 0;
+        padding: 8px 0;
+        gap: 0;
+        z-index: 3000; /* above bottom-sheet panels below */
+    }
+
+    .tab-item { width: 42px; height: 42px; }
+
+    /* Side panels: fixed 320-340px sidebars -> full-width bottom sheets,
+       stacked above the tab bar. Only one is meaningfully open at a
+       time in normal use (switchTab() in ui.js already hides/shows per
+       active tab), so stacking z-index isn't a new problem here. */
+    .left-panel,
+    .right-panel {
+        top: auto;
+        left: 0;
+        right: 0;
+        bottom: 64px;
+        width: 100%;
+        max-height: 55vh;
+        border-radius: 20px 20px 0 0;
+        padding: 1rem;
+    }
+
+    /* Collapsed state on mobile means "tucked below the fold," not a
+       slim icon rail (there's no side space for a rail on a phone
+       screen) — slide the whole sheet down instead, header included. */
+    .left-panel.collapsed,
+    .right-panel.collapsed {
+        max-height: 0;
+        padding: 0 1rem;
+        border-width: 0;
+    }
+    .left-panel.collapsed > *,
+    .right-panel.collapsed > * {
+        display: none;
+    }
+
+    .stats-grid,
+    .insight-grid {
+        grid-template-columns: 1fr 1fr;
+        gap: 10px;
+    }
+
+    /* Insight card: was a right-edge slide-in panel sized for desktop
+       (400px, animates via `right`); on mobile it becomes a bottom
+       sheet like the side panels, animated via transform instead so it
+       doesn't fight the side panels for the same "right" positioning
+       property. */
+    .insight-card {
+        left: 0;
+        right: 0;
+        bottom: 64px;
+        width: 100%;
+        max-height: 50vh;
+        overflow-y: auto;
+        border-radius: 20px 20px 0 0;
+        transform: translateY(100%);
+        transition: transform 0.4s cubic-bezier(0.19, 1, 0.22, 1);
+    }
+    .insight-card.active {
+        right: 0; /* neutralize the desktop right-based animation */
+        transform: translateY(0);
+    }
+
+    /* Timeline / preset strips: were offset to sit between the old left
+       dock and right panel (left:112px; right:380px) — neither offset
+       makes sense once both of those become full-width mobile elements,
+       so pull them in to the same 12px gutter as .top-nav and lift them
+       above the new bottom tab bar. */
+    .bottom-panel,
+    .timelapse-presets {
+        left: 12px;
+        right: 12px;
+        bottom: 76px;
+    }
+
+    /* Data-provenance badges (LIVE/EST/FORMULA) and confidence badges
+       stay legible rather than wrapping awkwardly in the now-narrower
+       stat cards. */
+    .data-source-badge { font-size: 0.5rem; padding: 1px 5px; }
+}
+
 @media (max-width: 480px) {
     .gaia-panel {
         right: 16px;
@@ -2317,6 +2563,17 @@ input[type="range"].timeline-slider::-webkit-slider-thumb:hover {
     .gaia-toggle-btn {
         right: 16px;
         bottom: 16px;
+    }
+
+    .stats-grid,
+    .insight-grid {
+        grid-template-columns: 1fr; /* single column once really narrow */
+    }
+
+    .left-panel,
+    .right-panel,
+    .insight-card {
+        max-height: 60vh;
     }
 }
 

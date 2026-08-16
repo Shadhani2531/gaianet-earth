@@ -62,12 +62,13 @@ class UIManager {
     // Satellite View is intentionally absent — it's real imagery, not a
     // severity scale, so it never gets a legend entry.
     static LAYER_LEGEND_CONFIG = {
-        'layer-temp': { label: 'Temperature (Anomaly)', type: 'gradient', stops: ['#3b82f6', '#eab308', '#ef4444'], words: ['Cold', 'Extreme'] },
+        'layer-temp': { label: 'Temperature (Anomaly)', type: 'gradient', stops: ['#2c6f8e', '#d8b23a', '#a12c2c'], words: ['Cold', 'Extreme'] },
         'layer-ndvi': { label: 'Vegetation (NDVI)', type: 'gradient', stops: ['#a16207', '#84cc16', '#14532d'], words: ['Sparse', 'Dense'] },
-        'layer-wildfires': { label: 'Active wildfires', type: 'dots', stops: ['#eab308', '#f97316', '#ef4444', '#b91c1c', '#7f1d1d'], words: ['Low', 'Extreme'] },
-        'layer-sensors': { label: 'Air quality (PM2.5)', type: 'dots', stops: ['#22c55e', '#eab308', '#f97316', '#ef4444', '#a855f7', '#7f1d1d'], words: ['Good', 'Hazardous'] },
+        'layer-wildfires': { label: 'Active wildfires', type: 'dots', stops: ['#f5b942', '#f2792e', '#e6432c', '#b31f1f', '#6e0f0f'], words: ['Low', 'Extreme (pulsing)'] },
+        'layer-sensors': { label: 'Air quality (PM2.5) — column height', type: 'dots', stops: ['#22c55e', '#eab308', '#f97316', '#ef4444', '#a855f7', '#7f1d1d'], words: ['Good', 'Hazardous'] },
         'layer-rainfall': { label: 'Rainfall (last hour)', type: 'gradient', stops: ['#78716c', '#7dd3fc', '#0ea5e9', '#1e3a8a'], words: ['Dry', 'Heavy'] },
         'layer-weather': { label: 'Cloud cover', type: 'gradient', stops: ['#fde047', '#cbd5e1', '#64748b'], words: ['Clear', 'Overcast'] },
+        'layer-wind': { label: 'Wind speed — arrow points downwind', type: 'gradient', stops: ['#7dd3fc', '#38bdf8', '#e8c547', '#e6432c'], words: ['Calm', 'Severe'] },
     };
 
     // Renders only the legend entries for layers currently switched on —
@@ -580,7 +581,7 @@ class UIManager {
     resetActiveLayers() {
         const layerToggleIds = [
             'layer-temp', 'layer-ndvi', 'layer-wildfires', 'layer-sensors',
-            'layer-rainfall', 'layer-weather'
+            'layer-rainfall', 'layer-weather', 'layer-wind'
         ];
         layerToggleIds.forEach(id => {
             const toggle = document.getElementById(id);
@@ -1012,6 +1013,51 @@ class UIManager {
         });
     }
 
+    // Small "LIVE" / "EST" pill next to a stat value, driven by the
+    // `data_source` field the backend already returns on nearly every
+    // response (live_waqi, real_openmeteo, real_modis, fallback,
+    // estimated_fallback, ...). This information existed end-to-end in
+    // the API before this change but stopped at the network response —
+    // nothing in the UI ever showed the person whether a number was a
+    // live reading or a labeled fallback estimate. See
+    // _setStatBadge() for how this gets attached next to a stat element.
+    _dataSourceBadge(source) {
+        if (!source) return null;
+        const live = new Set(['live_waqi', 'real_openmeteo', 'real_modis', 'live']);
+        const isLive = live.has(source);
+        return {
+            label: isLive ? 'LIVE' : 'EST',
+            cls: isLive ? 'live' : 'estimated',
+            title: `Data source: ${source.replace(/_/g, ' ')}`,
+        };
+    }
+
+    // Attaches (or updates) a small badge immediately after the element
+    // with id `valueElId`. Creates the badge element once, then just
+    // updates its text/class/title on subsequent calls — so this is
+    // safe to call every time a panel refreshes without leaking
+    // duplicate badge elements into the DOM.
+    _setStatBadge(valueElId, source) {
+        const valueEl = document.getElementById(valueElId);
+        if (!valueEl) return;
+        const info = this._dataSourceBadge(source);
+
+        let badge = valueEl.parentElement.querySelector(`.data-source-badge[data-for="${valueElId}"]`);
+        if (!info) {
+            if (badge) badge.remove();
+            return;
+        }
+        if (!badge) {
+            badge = document.createElement('span');
+            badge.className = 'data-source-badge';
+            badge.dataset.for = valueElId;
+            valueEl.insertAdjacentElement('afterend', badge);
+        }
+        badge.className = `data-source-badge ${info.cls}`;
+        badge.textContent = info.label;
+        badge.title = info.title;
+    }
+
     // AQI color scale shared with the sensor dots on the globe and the
     // browser extension's AQI_ALERT_THRESHOLD (200) — kept in one place
     // here so the forecast bars, if that scale ever changes, are easy to
@@ -1109,6 +1155,21 @@ class UIManager {
 
         valueEl.textContent = `${wildfireRiskData.score} (${wildfireRiskData.category})`;
 
+        // Not live/fallback like the other stats — this is always a
+        // derived formula over real inputs, so it gets its own badge
+        // rather than reusing the live/estimated vocabulary, which
+        // would misleadingly imply it's either a raw measurement or a
+        // degraded one.
+        let formulaBadge = valueEl.parentElement.querySelector('.data-source-badge[data-for="stat-risk"]');
+        if (!formulaBadge) {
+            formulaBadge = document.createElement('span');
+            formulaBadge.className = 'data-source-badge formula';
+            formulaBadge.dataset.for = 'stat-risk';
+            formulaBadge.textContent = 'FORMULA';
+            formulaBadge.title = 'Rule-based fire danger index from real inputs — not a trained ML model.';
+            valueEl.insertAdjacentElement('afterend', formulaBadge);
+        }
+
         const colorByCategory = {
             'Low': 'var(--success)',
             'Moderate': 'var(--warning-amber)',
@@ -1162,6 +1223,17 @@ class UIManager {
             
             document.querySelector('#stat-aqi').previousElementSibling.innerText = "Air Quality (AQI)";
             document.querySelector('#stat-co2').previousElementSibling.innerText = "CO₂ (ppm)";
+
+            // AQI is the field that actually varies live/fallback per
+            // request (see mock_data.py); CO2 is always the real NOAA
+            // monthly figure once fetched successfully, so it always
+            // reads LIVE here rather than tracking AQI's source.
+            this._setStatBadge('stat-aqi', envData.data_source);
+            // CO2 always comes from a real NOAA GML reading (see
+            // mock_data.get_real_global_co2_ppm) — it's either today's
+            // fetch or the last successfully cached real value, never a
+            // fabricated fallback, so this always reads LIVE.
+            this._setStatBadge('stat-co2', 'live');
         }
 
         if (ndviData) {
@@ -1171,6 +1243,8 @@ class UIManager {
             if (ndviData.ndvi > 0.6) ndviElem.style.color = 'var(--success)';
             else if (ndviData.ndvi > 0.2) ndviElem.style.color = 'var(--warning)';
             else ndviElem.style.color = 'var(--danger)';
+
+            this._setStatBadge('stat-ndvi', ndviData.data_source);
         }
 
         // Update Charts
@@ -1223,9 +1297,18 @@ class UIManager {
             document.getElementById('node-precip').innerText = `${latest.total_rainfall_mm}mm`;
             document.getElementById('node-anomaly').innerText = `${climateData.current_anomaly}°C`;
 
+            // climateData.data_source is "real_openmeteo" or
+            // "estimated_fallback" — applies to temp/rainfall/anomaly,
+            // all three of which come from the same Open-Meteo call.
+            this._setStatBadge('node-temp', climateData.data_source);
+            this._setStatBadge('node-precip', climateData.data_source);
+            this._setStatBadge('node-anomaly', climateData.data_source);
+
             if (envData) {
                 document.getElementById('node-aqi').innerText = envData.air_quality_index ?? '--';
                 document.getElementById('node-co2').innerText = envData.co2_ppm ? `${envData.co2_ppm}` : '--';
+                this._setStatBadge('node-aqi', envData.data_source);
+                this._setStatBadge('node-co2', 'live'); // real NOAA GML reading, see stat-co2 above
             }
 
             if (shiData) {

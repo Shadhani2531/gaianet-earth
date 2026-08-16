@@ -141,7 +141,7 @@ def _fetch_global_grid_conditions() -> Optional[Dict[str, Any]]:
             params={
                 "latitude": lat_str,
                 "longitude": lon_str,
-                "current": "temperature_2m,precipitation,cloud_cover",
+                "current": "temperature_2m,precipitation,cloud_cover,wind_speed_10m,wind_direction_10m",
                 "timezone": "GMT",
             },
             timeout=20,
@@ -164,6 +164,8 @@ def _fetch_global_grid_conditions() -> Optional[Dict[str, Any]]:
                 "temp": temp,
                 "precip": current.get("precipitation") or 0.0,
                 "cloud_cover": current.get("cloud_cover"),
+                "wind_speed_kmh": current.get("wind_speed_10m"),
+                "wind_direction_deg": current.get("wind_direction_10m"),
             })
 
         dataset = {"readings": readings, "fetched_at": now}
@@ -247,6 +249,54 @@ def get_weather_conditions_geojson() -> Dict[str, Any]:
         "features": features,
         "metadata": {
             "source": "Open-Meteo (real current cloud cover, %)",
+            "timestamp": grid["fetched_at"].isoformat()
+        }
+    }
+
+
+def get_wind_geojson() -> Dict[str, Any]:
+    """
+    Real current wind speed + direction on the same coarse global grid as
+    temperature/rainfall/cloud-cover — reuses _fetch_global_grid_conditions's
+    existing cache rather than a separate upstream call, since Open-Meteo
+    already returns wind alongside those fields in one request.
+
+    `wind_direction_deg` follows the standard meteorological convention:
+    degrees clockwise from north, indicating the direction the wind is
+    blowing FROM (0=N, 90=E, 180=S, 270=W). The frontend's arrow-glyph
+    wind layer rotates arrows to point where the wind is blowing TOWARD
+    (direction + 180) since that reads more intuitively as a flow
+    indicator — documented here so the convention flip isn't a mystery
+    to whoever touches this next.
+    """
+    grid = _fetch_global_grid_conditions()
+    if not grid:
+        return {"type": "FeatureCollection", "features": [],
+                "metadata": {"source": "Open-Meteo", "status": "unavailable"}}
+
+    features = []
+    for r in grid["readings"]:
+        speed = r.get("wind_speed_kmh")
+        direction = r.get("wind_direction_deg")
+        if speed is None or direction is None:
+            continue
+        features.append({
+            "type": "Feature",
+            "geometry": {"type": "Point", "coordinates": [float(r["lon"]), float(r["lat"])]},
+            "properties": {
+                "value": float(speed),
+                "speed_kmh": float(speed),
+                "direction_deg": float(direction),
+                "type": "wind",
+                "data_source": "real_openmeteo",
+            }
+        })
+
+    return {
+        "type": "FeatureCollection",
+        "features": features,
+        "metadata": {
+            "source": "Open-Meteo (real current wind speed + direction, 10m)",
             "timestamp": grid["fetched_at"].isoformat()
         }
     }
