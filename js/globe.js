@@ -1,12 +1,5 @@
 class GlobeManager {
     constructor() {
-        // Historical timeline range: MODIS Terra coverage begins Feb 2000,
-        // so anything earlier would show today's imagery mislabeled as
-        // history rather than real historical imagery. Capped at the
-        // present year since there's no future imagery to show either.
-        this.TIMELINE_START_YEAR = 2000;
-        this.TIMELINE_END_YEAR = new Date().getFullYear();
-
         if (CONFIG.CESIUM_ION_TOKEN) {
             Cesium.Ion.defaultAccessToken = CONFIG.CESIUM_ION_TOKEN;
         }
@@ -50,12 +43,11 @@ class GlobeManager {
         this.viewer.scene.skyAtmosphere.brightnessShift = -0.3;
 
         this.layers = {
-            temperature: null,
+            temperatureAnomalyImagery: null,
             co2: null,
             pollution: null,
             weather: null,
             ndvi: null,
-            ndviImagery: null, // Track imagery layer separately
             wind: null,
             wildfires: [],
             sensors: [],
@@ -99,7 +91,6 @@ class GlobeManager {
         
         // Auto-rotation state
         this.isAutoRotating = false;
-        this.lastSliderValue = 100; // Baseline for rotation
         this.lastTime = Date.now();
         
         document.addEventListener('minimalModeChanged', (e) => {
@@ -241,6 +232,12 @@ class GlobeManager {
         });
     }
 
+    // Loads all real reports once at startup and creates their pins —
+    // visibility is controlled separately by setReportsVisible(), tied to
+    // the 'reports' tab via ui.js's TAB_SCOPED_TEARDOWN, same as every
+    // other tab-specific globe layer. (An earlier version of this
+    // comment treated report pins as a deliberate global exception to
+    // tab isolation — that was wrong; they follow the same rule now.)
     async loadUserReports() {
         const reports = await api.getReports();
         if (reports && reports.length) {
@@ -253,6 +250,8 @@ class GlobeManager {
             'Fire': Cesium.Color.ORANGERED,
             'Pollution': Cesium.Color.PURPLE,
             'Deforestation': Cesium.Color.LIMEGREEN,
+            'Water': Cesium.Color.DODGERBLUE,
+            'Flooding': Cesium.Color.ROYALBLUE,
             'Other': Cesium.Color.YELLOW
         };
 
@@ -260,6 +259,14 @@ class GlobeManager {
         
         const entity = this.viewer.entities.add({
             position: Cesium.Cartesian3.fromDegrees(data.lon, data.lat),
+            // Report pins previously showed on every tab regardless of
+            // which was active — the one layer that slipped through the
+            // tab-isolation rule everything else already follows (see
+            // ui.js's TAB_SCOPED_TEARDOWN). Starts visible only if
+            // 'reports' happens to already be the active tab; setReportsVisible()
+            // (called from TAB_SCOPED_TEARDOWN / switchTab's 'reports' case)
+            // is what actually controls this going forward.
+            show: AppState.activeTab === 'reports',
             point: {
                 pixelSize: 10,
                 color: color,
@@ -306,6 +313,15 @@ class GlobeManager {
         };
 
         this.layers.reports.push(entity);
+    }
+
+    // Shows/hides every citizen report pin at once. Called from
+    // ui.js's TAB_SCOPED_TEARDOWN (hide, on every tab switch) and from
+    // switchTab()'s 'reports' case (show, when that tab is actually
+    // active) — the same pattern every other tab-specific layer already
+    // follows, which report pins had been missing.
+    setReportsVisible(visible) {
+        this.layers.reports.forEach((e) => { e.show = visible; });
     }
 
     startAutoRotation() {
@@ -414,20 +430,13 @@ class GlobeManager {
             }
         }, Cesium.ScreenSpaceEventType.LEFT_CLICK);
 
-        // --- RIGHT CLICK FOR CITIZEN SCIENCE ---
-        handler.setInputAction((movement) => {
-            const cartesian = this.viewer.camera.pickEllipsoid(movement.position, this.viewer.scene.globe.ellipsoid);
-            if (cartesian) {
-                const cartographic = Cesium.Cartographic.fromCartesian(cartesian);
-                const lat = Cesium.Math.toDegrees(cartographic.latitude);
-                const lon = Cesium.Math.toDegrees(cartographic.longitude);
-                
-                // Dispatch event to UI to open modal
-                document.dispatchEvent(new CustomEvent('openReportModal', { 
-                    detail: { lat, lon } 
-                }));
-            }
-        }, Cesium.ScreenSpaceEventType.RIGHT_CLICK);
+        // Citizen reporting used to have its own right-click gesture here,
+        // dispatching openReportModal with whatever point was clicked.
+        // Removed — the sidebar's "Submit a Report" button (js/ui.js) is
+        // now the only entry point, using AppState.selectedLocation
+        // (already set by the LEFT_CLICK handler above) rather than a
+        // separate, less discoverable interaction. Kept the app to one
+        // consistent way to trigger every action instead of two.
 
         // Update layers based on UI toggles
         document.getElementById('layer-wildfires').addEventListener('change', (e) => {
@@ -436,7 +445,7 @@ class GlobeManager {
         });
         document.getElementById('layer-temp').addEventListener('change', (e) => {
             AppState.setLayerActive('layer-temp', e.target.checked);
-            this.toggleEnvironmentalLayer(e.target.checked, 'temperature');
+            this.toggleTemperatureAnomalyRaster(e.target.checked);
         });
         document.getElementById('layer-ndvi').addEventListener('change', (e) => {
             AppState.setLayerActive('layer-ndvi', e.target.checked);
@@ -459,269 +468,22 @@ class GlobeManager {
             this.toggleWindLayer(e.target.checked);
         });
 
-        // Time Slider Integration.
-        // Was looking for id="time-slider" — the actual element is
-        // id="timeline-slider". That mismatch meant this threw a
-        // TypeError (addEventListener on null) every single time,
-        // uncaught, from inside this constructor — which is very likely
-        // why the Historical Changes tab never rendered anything.
-        const timeSlider = document.getElementById('timeline-slider');
-        if (timeSlider) {
-            timeSlider.addEventListener('input', (e) => this.updateTime(e.target.value));
-        } else {
-            console.error('timeline-slider element not found — historical timeline will not respond to dragging.');
-        }
-
         // Level of Detail (LOD) based on camera height
         this.viewer.camera.moveEnd.addEventListener(() => {
             this.applyLOD();
         });
     }
 
-    async toggleSatelliteView(visible) {
-        if (!visible) {
-            if (this.layers.satellite) {
-                this.viewer.imageryLayers.remove(this.layers.satellite_base);
-                this.viewer.imageryLayers.remove(this.layers.satellite);
-                this.layers.satellite = null;
-                this.layers.satellite_base = null;
-            }
-            return;
-        }
+    // The temporal 4D engine (toggleSatelliteView, updateTime, rotateToTime,
+    // refreshImageryLayers, refreshNdviImagery, refreshSatelliteImagery,
+    // toggleSplitScreen, initSplitDividerInteraction) used to live here,
+    // driving live Cesium WMTS imagery layers on this same shared globe.
+    // That approach caused visible glitching (rapid layer add/remove
+    // fighting over the one shared scene, bleeding into every other tab)
+    // and has been replaced entirely by js/snapshot-viewer.js, which
+    // renders flat NASA GIBS snapshot images in its own panel and never
+    // touches the globe. See PROJECT_STATUS.md for the historical note.
 
-        // Idempotent: if satellite is already on, do nothing rather than
-        // stacking a second set of imagery layers on top of the first.
-        // Without this guard, calling toggleSatelliteView(true) while
-        // already visible (e.g. switchTab running twice for the same tab)
-        // added duplicate overlapping layers — likely the cause of the
-        // "satellite view coming and going" flicker.
-        if (this.layers.satellite) {
-            return;
-        }
-
-        // 1. Seamless Base Layer (Blue Marble) to fill gaps.
-        // Switched from the geographic (epsg4326) endpoint to GIBS' Web
-        // Mercator (epsg3857) GoogleMapsCompatible endpoint — this matches
-        // Cesium's native default tiling scheme exactly (no custom
-        // tilingScheme needed), which is the integration path GIBS' own
-        // examples recommend. The epsg4326 + GeographicTilingScheme
-        // combination from last round only partially matched GIBS' actual
-        // tile matrix layout, which is what caused the partial/wedged
-        // rendering.
-        const baseProvider = new Cesium.WebMapTileServiceImageryProvider({
-            url: 'https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/wmts.cgi',
-            layer: 'BlueMarble_NextGeneration',
-            style: 'default',
-            format: 'image/jpeg',
-            tileMatrixSetID: 'GoogleMapsCompatible_Level8',
-            maximumLevel: 8,
-            credit: 'NASA GIBS (Blue Marble)'
-        });
-
-        // 2. High-res Swath Layer (MODIS) for detail
-        const imageryProvider = new Cesium.WebMapTileServiceImageryProvider({
-            url: 'https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/wmts.cgi',
-            layer: 'MODIS_Terra_CorrectedReflectance_TrueColor',
-            style: 'default',
-            format: 'image/jpeg',
-            tileMatrixSetID: 'GoogleMapsCompatible_Level9',
-            maximumLevel: 9,
-            credit: 'NASA GIBS (MODIS Terra)'
-        });
-
-        this.layers.satellite_base = this.viewer.imageryLayers.addImageryProvider(baseProvider);
-        this.layers.satellite = this.viewer.imageryLayers.addImageryProvider(imageryProvider);
-        this.viewer.scene.requestRender();
-    }
-
-    updateTime(value, type = 'primary') {
-        // Range: 2000 (MODIS Terra coverage begins Feb 2000 — anything
-        // earlier would just show today's imagery mislabeled as history,
-        // not real historical imagery) through the present year (no future
-        // imagery exists to show either).
-        const startYear = this.TIMELINE_START_YEAR;
-        const totalMonths = (this.TIMELINE_END_YEAR - startYear) * 12;
-        const currentMonthTotal = Math.floor((value / 100) * totalMonths);
-        const year = startYear + Math.floor(currentMonthTotal / 12);
-        const month = (currentMonthTotal % 12) + 1;
-        const monthStr = month.toString().padStart(2, '0');
-        const dateStr = `${year}-${monthStr}-01`;
-        
-        if (type === 'primary') {
-            this.currentDate = dateStr;
-            this.rotateToTime(value); // Instant — no debounce, stays smooth while dragging
-            if (window.ui) window.ui.updateDateDisplay(value, 'primary');
-        } else {
-            this.historicalDate = dateStr;
-            if (window.ui) window.ui.updateDateDisplay(value, 'historical');
-        }
-
-        // Debounce the actual imagery fetch. Dragging the slider fires many
-        // 'input' events per second, and each one used to trigger an
-        // immediate full GIBS tile refresh — dozens of full reloads while
-        // dragging, which is what caused the lag and tile-popping. Waiting
-        // until the user pauses for 200ms means the date label and camera
-        // rotation stay instantly responsive while dragging, and imagery
-        // only loads once, right after they settle on a date.
-        clearTimeout(this._imageryRefreshTimeout);
-        this._imageryRefreshTimeout = setTimeout(() => {
-            this.refreshImageryLayers();
-        }, 200);
-
-        console.log(`4D Engine [${type.toUpperCase()}]: ${dateStr}`);
-    }
-
-    rotateToTime(sliderValue) {
-        // Do not rotate globe during timelapse playback if the user locked it
-        if (this.isTimelapsePlaying) return;
-
-        // Calculate the difference from last value
-        const delta = sliderValue - this.lastSliderValue;
-        if (Math.abs(delta) < 0.1) return; // Ignore micro-jitters
-        
-        const totalYears = (this.TIMELINE_END_YEAR - this.TIMELINE_START_YEAR);
-        const deltaYears = (delta / 100) * totalYears;
-        
-        // 1 Year = 360 degrees (per user requirement)
-        const deltaRotation = Cesium.Math.toRadians(360 * deltaYears);
-        
-        // Rotate around Z axis (Earth's axis)
-        this.viewer.camera.rotate(Cesium.Cartesian3.UNIT_Z, deltaRotation);
-        
-        this.lastSliderValue = sliderValue;
-    }
-
-    async refreshImageryLayers() {
-        if (this.layers.ndviImagery) {
-            this.refreshNdviImagery(this.currentDate, 
-                this.isSplitMode ? Cesium.SplitDirection.RIGHT : Cesium.SplitDirection.NONE, 
-                'ndviImagery'
-            );
-        }
-        
-        // Also update Satellite layer if active
-        if (this.layers.satellite) {
-            this.refreshSatelliteImagery(this.currentDate);
-        }
-
-        if (this.isSplitMode) {
-            this.refreshNdviImagery(this.historicalDate || "2000-02-01", 
-                Cesium.SplitDirection.LEFT, 
-                'historicalNdvi'
-            );
-        }
-    }
-
-    async refreshNdviImagery(date, splitDir, layerKey) {
-        if (this._lastNdviDate === date) return;
-        this._lastNdviDate = date;
-
-        const oldLayer = this.layers[layerKey];
-        
-        const provider = new Cesium.WebMapTileServiceImageryProvider({
-            url: 'https://gibs.earthdata.nasa.gov/wmts/epsg4326/best/wmts.cgi',
-            layer: 'MODIS_Terra_NDVI_Monthly',
-            style: 'default',
-            format: 'image/png',
-            tileMatrixSetID: '250m',
-            maximumLevel: 8,
-            tilingScheme: new Cesium.GeographicTilingScheme(),
-            parameters: { time: date }
-        });
-        
-        this.layers[layerKey] = this.viewer.imageryLayers.addImageryProvider(provider);
-        this.layers[layerKey].alpha = 0.8;
-        this.layers[layerKey].splitDirection = splitDir;
-
-        if (oldLayer) {
-            if (this._ndviTimeout) clearTimeout(this._ndviTimeout);
-            if (this._prevNdviLayer && this.viewer.imageryLayers.contains(this._prevNdviLayer)) {
-                this.viewer.imageryLayers.remove(this._prevNdviLayer);
-            }
-            this._prevNdviLayer = oldLayer;
-
-            this._ndviTimeout = setTimeout(() => {
-                if (this.viewer && this.viewer.imageryLayers.contains(oldLayer)) {
-                    this.viewer.imageryLayers.remove(oldLayer);
-                }
-                this._prevNdviLayer = null;
-            }, 800);
-        }
-    }
-
-    async refreshSatelliteImagery(date) {
-        if (this._lastSatDate === date) return;
-        this._lastSatDate = date;
-
-        const oldLayer = this.layers.satellite;
-        
-        const provider = new Cesium.WebMapTileServiceImageryProvider({
-            url: 'https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/wmts.cgi',
-            layer: 'MODIS_Terra_CorrectedReflectance_TrueColor',
-            style: 'default',
-            format: 'image/jpeg',
-            tileMatrixSetID: 'GoogleMapsCompatible_Level9',
-            maximumLevel: 9,
-            parameters: { time: date }
-        });
-        
-        this.layers.satellite = this.viewer.imageryLayers.addImageryProvider(provider);
-
-        if (oldLayer) {
-            if (this._satTimeout) clearTimeout(this._satTimeout);
-            if (this._prevSatLayer && this.viewer.imageryLayers.contains(this._prevSatLayer)) {
-                this.viewer.imageryLayers.remove(this._prevSatLayer);
-            }
-            this._prevSatLayer = oldLayer;
-
-            this._satTimeout = setTimeout(() => {
-                if (this.viewer && this.viewer.imageryLayers.contains(oldLayer)) {
-                    this.viewer.imageryLayers.remove(oldLayer);
-                }
-                this._prevSatLayer = null;
-            }, 800);
-        }
-    }
-
-    toggleSplitScreen(enabled) {
-        this.isSplitMode = enabled;
-        const divider = document.getElementById('split-divider');
-        
-        if (enabled) {
-            divider.classList.remove('hidden');
-            this.initSplitDividerInteraction();
-            this.refreshImageryLayers();
-        } else {
-            divider.classList.add('hidden');
-            if (this.layers.historicalNdvi) {
-                this.viewer.imageryLayers.remove(this.layers.historicalNdvi);
-                this.layers.historicalNdvi = null;
-            }
-            if (this.layers.ndviImagery) this.layers.ndviImagery.splitDirection = Cesium.SplitDirection.NONE;
-        }
-    }
-
-    initSplitDividerInteraction() {
-        const divider = document.getElementById('split-divider');
-        let dragging = false;
-
-        const move = (e) => {
-            if (!dragging) return;
-            const x = e.clientX;
-            const width = window.innerWidth;
-            const splitPosition = x / width;
-            
-            divider.style.left = `${x}px`;
-            this.viewer.scene.imagerySplitPosition = splitPosition;
-        };
-
-        const onDown = () => { dragging = true; };
-        const onUp = () => { dragging = false; };
-
-        divider.addEventListener('mousedown', onDown);
-        document.addEventListener('mouseup', onUp);
-        document.addEventListener('mousemove', move);
-    }
 
     showEntityInfo(entity) {
         const data = entity._customData;
@@ -1105,14 +867,22 @@ class GlobeManager {
         // direct testing, and is still used separately for Tab 3's
         // historical imagery comparison, where an actual image layer adds
         // real value).
+        // Temperature/anomaly used to render here too, as grid-cell
+        // rectangles like the other three — moved to its own dedicated
+        // toggleTemperatureAnomalyRaster() (interpolated raster imagery
+        // layer) because at only 126 real points on a 20° grid with a
+        // latitude-only baseline model, rectangle cells visually banded
+        // by latitude rather than reading as real geographic variation.
+        // NDVI/rainfall/weather don't have that same problem (their
+        // values vary genuinely by both lat and lon, not just lat), so
+        // they're unchanged here.
         const fetchers = {
             ndvi: () => api.getVegetation(),
-            temperature: () => api.getClimate(),
             rainfall: () => api.getRainfall(),
             weather: () => api.getWeatherConditions(),
         };
         const labels = {
-            ndvi: 'vegetation', temperature: 'temperature',
+            ndvi: 'vegetation',
             rainfall: 'rainfall', weather: 'weather conditions',
         };
         const data = await fetchers[type]();
@@ -1159,15 +929,6 @@ class GlobeManager {
                     if (val < 0.2) colorHex = '#a16207';
                     else if (val < 0.5) colorHex = '#84cc16';
                     else colorHex = '#14532d';
-                } else if (type === 'temperature') {
-                    // Cool -> mid -> hot (anomaly), custom hex matching
-                    // the rest of the app's palette instead of raw named
-                    // Cesium colors (Color.BLUE/YELLOW/RED), which read
-                    // as harsh/generic next to every other layer's
-                    // deliberately chosen hues.
-                    if (val < 0) colorHex = '#2c6f8e';
-                    else if (val < 1.0) colorHex = '#d8b23a';
-                    else colorHex = '#a12c2c';
                 } else if (type === 'rainfall') {
                     // Dry -> light rain -> heavy rain (mm in the last hour)
                     if (val <= 0) colorHex = '#78716c'; // Dry
@@ -1193,14 +954,28 @@ class GlobeManager {
                 // "less certain," consistent with the LIVE/EST badge
                 // language used in the side panels.
                 const isEstimated = pointSource && pointSource !== 'real_modis' && pointSource !== 'real_openmeteo';
-                const fillAlpha = isEstimated ? 0.18 : 0.42;
+                const fillAlpha = isEstimated ? 0.22 : 0.62;
 
                 entity.point = undefined;
+                entity.billboard = undefined; // Cesium's GeoJsonDataSource default is a billboard pin, not .point — only nulling .point left every grid cell's default blue marker fully visible
+                // A grid cell centered near the antimeridian (lon close to
+                // ±180°) or a pole (lat close to ±90°) can compute an edge
+                // past the valid range once halfStepDeg is added/
+                // subtracted — Cesium.Rectangle.fromDegrees does not wrap
+                // or clip this itself, it throws a hard DeveloperError
+                // ("Expected west to be greater than or equal to -PI...")
+                // that stops the entire render loop, not just that one
+                // cell. Clamping slightly distorts the handful of cells
+                // right at that edge, which is a far better tradeoff than
+                // crashing the whole tab over it.
+                const west = Math.max(-180, lon - halfStepDeg);
+                const east = Math.min(180, lon + halfStepDeg);
+                const south = Math.max(-90, lat - halfStepDeg);
+                const north = Math.min(90, lat + halfStepDeg);
+                if (west >= east || south >= north) continue; // degenerate cell, skip rather than guess
+
                 entity.rectangle = {
-                    coordinates: Cesium.Rectangle.fromDegrees(
-                        lon - halfStepDeg, lat - halfStepDeg,
-                        lon + halfStepDeg, lat + halfStepDeg
-                    ),
+                    coordinates: Cesium.Rectangle.fromDegrees(west, south, east, north),
                     material: Cesium.Color.fromCssColorString(colorHex).withAlpha(fillAlpha),
                     outline: true,
                     outlineColor: Cesium.Color.fromCssColorString('#94a3b8').withAlpha(0.18),
@@ -1221,6 +996,172 @@ class GlobeManager {
             this.viewer.scene.requestRender();
         } catch (e) {
             console.error(`Error loading layer ${type}:`, e);
+        }
+    }
+
+    // Diverging color scale for temperature anomaly, centered at 0°C —
+    // dark blue (<=-4) -> light blue (-2) -> near-neutral/transparent (0)
+    // -> orange (+2) -> red (>=+4). Piecewise-linear RGB interpolation
+    // between these five real control points, not a hard bucket split,
+    // so the color itself varies smoothly with the interpolated value.
+    _anomalyToColor(value) {
+        const stops = [
+            { v: -4, rgb: [8, 48, 107] },    // dark blue
+            { v: -2, rgb: [107, 174, 214] }, // light blue
+            { v: 0, rgb: [230, 230, 230] },  // neutral (near-transparent via alpha, not pure white)
+            { v: 2, rgb: [253, 141, 60] },   // orange
+            { v: 4, rgb: [165, 15, 21] },    // red
+        ];
+        const clamped = Math.max(-4, Math.min(4, value));
+        let lo = stops[0], hi = stops[stops.length - 1];
+        for (let i = 0; i < stops.length - 1; i++) {
+            if (clamped >= stops[i].v && clamped <= stops[i + 1].v) {
+                lo = stops[i]; hi = stops[i + 1];
+                break;
+            }
+        }
+        const span = hi.v - lo.v;
+        const t = span === 0 ? 0 : (clamped - lo.v) / span;
+        const rgb = lo.rgb.map((c, i) => Math.round(c + (hi.rgb[i] - c) * t));
+
+        // Alpha grows with |anomaly| magnitude rather than being fixed —
+        // near-baseline areas fade toward transparent ("approximately
+        // normal" reads as barely-there), strongly anomalous areas reach
+        // the spec's ~0.45-0.60 ceiling. Never fully opaque, so the base
+        // imagery, coastlines, and borders stay visible underneath.
+        const magnitude = Math.min(1, Math.abs(clamped) / 4);
+        const alpha = 0.10 + magnitude * 0.50; // 0.10 at anomaly=0 .. 0.60 at |anomaly|>=4
+
+        return [rgb[0], rgb[1], rgb[2], Math.round(alpha * 255)];
+    }
+
+    // Builds a smooth interpolated raster from the real grid points using
+    // Inverse Distance Weighting (IDW) — a standard, honest spatial
+    // interpolation method: every output pixel is a distance-weighted
+    // blend of REAL nearby measurements, never a value invented outside
+    // what the real data supports. A point falling exactly on a real
+    // sample returns that real value unchanged (see the near-zero-
+    // distance short-circuit below).
+    async toggleTemperatureAnomalyRaster(visible, offset = 0) {
+        if (!visible) {
+            if (this.layers.temperatureAnomalyImagery) {
+                this.viewer.imageryLayers.remove(this.layers.temperatureAnomalyImagery);
+                this.layers.temperatureAnomalyImagery = null;
+            }
+            return;
+        }
+
+        const data = await api.getClimate();
+        if (!data || !data.features || data.features.length === 0) {
+            const message = api.lastErrorKind === 'network'
+                ? `Could not reach the backend — check that the FastAPI server is running and reachable at ${CONFIG.API_BASE_URL}.`
+                : `The backend is running, but couldn't get real temperature data from its upstream source (Open-Meteo) right now — check the backend server's console log for the actual error, or try again in a minute.`;
+            document.dispatchEvent(new CustomEvent('layerNotice', { detail: { message } }));
+            return;
+        }
+
+        // Real (lat, lon, anomaly) tuples — this is the actual spatial
+        // data the interpolation is built from, nothing else.
+        const points = data.features.map(f => ({
+            lon: f.geometry.coordinates[0],
+            lat: f.geometry.coordinates[1],
+            value: f.properties.value,
+        }));
+
+        // Real data's actual latitude range (matches
+        // backend/services/climate.py's _build_grid_points: -60..80) —
+        // used below to leave rows outside this range fully transparent,
+        // never to restrict the imagery layer's own rectangle.
+        const dataSouth = Math.min(...points.map(p => p.lat));
+        const dataNorth = Math.max(...points.map(p => p.lat));
+
+        // Full-globe extent for both the canvas and the imagery
+        // rectangle — NOT a custom rectangle restricted to where real
+        // data exists. SingleTileImageryProvider assumes a
+        // GeographicTilingScheme, and its standard, well-tested usage is
+        // covering the full globe rectangle; an earlier version of this
+        // code used a smaller custom rectangle (just the real data's
+        // latitude range) and that combination produced a severe
+        // tiling/repeating artifact — the same single image rendering
+        // several times across the globe instead of stretching once.
+        // Using the full extent here removes that variable entirely.
+        // Coverage honesty is preserved a different way: rows outside
+        // the real data's actual latitude range are painted fully
+        // transparent (alpha 0) rather than given a color, so nothing
+        // is visually claimed for the poles where there's no real
+        // sample — see the transparency check in the pixel loop below.
+        const west = -180, east = 180, south = -90, north = 90;
+
+        // One pixel per degree across the FULL globe (360x180) — still
+        // cheap: see the performance note below, ~127ms measured for a
+        // comparable pixel count with 126 real points.
+        const width = 360;
+        const height = 180;
+        const canvas = document.createElement('canvas');
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext('2d');
+        const imageData = ctx.createImageData(width, height);
+
+        const POWER = 2; // standard IDW exponent
+        for (let py = 0; py < height; py++) {
+            const lat = north - py - 0.5; // canvas row 0 = north edge, sample at pixel center
+            for (let px = 0; px < width; px++) {
+                const lon = west + px + 0.5;
+                const idx = (py * width + px) * 4;
+
+                // No real data exists outside the sampled latitude band
+                // (poles) — leave fully transparent rather than color it,
+                // instead of restricting the rectangle to avoid this.
+                if (lat < dataSouth || lat > dataNorth) {
+                    imageData.data[idx] = 0;
+                    imageData.data[idx + 1] = 0;
+                    imageData.data[idx + 2] = 0;
+                    imageData.data[idx + 3] = 0;
+                    continue;
+                }
+
+                let weightedSum = 0;
+                let weightTotal = 0;
+                let exact = null;
+                for (const p of points) {
+                    const dLat = lat - p.lat;
+                    let dLon = Math.abs(lon - p.lon);
+                    if (dLon > 180) dLon = 360 - dLon; // shortest path across the antimeridian, e.g. 170 vs -170 is really 20 apart, not 340
+                    const distSq = dLat * dLat + dLon * dLon;
+                    if (distSq < 1e-6) { exact = p.value; break; } // essentially on a real sample point
+                    const w = 1 / Math.pow(distSq, POWER / 2);
+                    weightedSum += w * p.value;
+                    weightTotal += w;
+                }
+                const interpolated = (exact !== null ? exact : (weightTotal > 0 ? weightedSum / weightTotal : 0)) + offset;
+
+                const [r, g, b, a] = this._anomalyToColor(interpolated);
+                imageData.data[idx] = r;
+                imageData.data[idx + 1] = g;
+                imageData.data[idx + 2] = b;
+                imageData.data[idx + 3] = a;
+            }
+        }
+        ctx.putImageData(imageData, 0, 0);
+
+        // Remove any previous layer before adding the new one — never
+        // stack multiple temperature imagery layers on top of each other.
+        if (this.layers.temperatureAnomalyImagery) {
+            this.viewer.imageryLayers.remove(this.layers.temperatureAnomalyImagery);
+            this.layers.temperatureAnomalyImagery = null;
+        }
+
+        try {
+            const provider = await Cesium.SingleTileImageryProvider.fromUrl(
+                canvas.toDataURL('image/png'),
+                { rectangle: Cesium.Rectangle.fromDegrees(west, south, east, north) }
+            );
+            const layer = new Cesium.ImageryLayer(provider);
+            this.viewer.imageryLayers.add(layer);
+            this.layers.temperatureAnomalyImagery = layer;
+        } catch (e) {
+            console.error('Failed to build temperature anomaly raster layer:', e);
         }
     }
 
@@ -1267,25 +1208,17 @@ class GlobeManager {
 
         document.addEventListener('globalSimulationApplied', (e) => {
              const { tempOffset, rainOffset } = e.detail;
-             
-             // Intensify Temperature Layer
-             if (this.layers.temperature) {
-                 this.layers.temperature.entities.values.forEach(entity => {
-                     if (entity.rectangle) {
-                         const base = entity._customData.value;
-                         const current = base + tempOffset;
 
-                         // Same custom-hex palette as toggleEnvironmentalLayer's
-                         // normal render — kept in sync so a running "what-if"
-                         // simulation doesn't visually diverge from the app's
-                         // regular temperature colors.
-                         let colorHex = '#2c6f8e';
-                         if (current > 1.0) colorHex = '#a12c2c';
-                         else if (current > 0) colorHex = '#d8b23a';
-
-                         entity.rectangle.material = Cesium.Color.fromCssColorString(colorHex).withAlpha(0.42);
-                     }
-                 });
+             // Intensify Temperature Layer — regenerates the interpolated
+             // raster with the simulated offset applied to every real
+             // point before coloring (see toggleTemperatureAnomalyRaster's
+             // offset parameter), rather than poking individual rectangle
+             // entities the way this used to work before temperature
+             // moved to a raster imagery layer. Only re-renders if the
+             // layer is currently on — a running simulation shouldn't
+             // spontaneously turn on a layer the user hasn't enabled.
+             if (this.layers.temperatureAnomalyImagery) {
+                 this.toggleTemperatureAnomalyRaster(true, tempOffset);
              }
 
              // Intensify NDVI Layer
@@ -1479,12 +1412,42 @@ class GlobeManager {
         }
     }
 
-    async renderGlobalShiHeatmap(countries) {
-        // Clear any previous heatmap layer
+    // Interpolates a 0-100 SHI score into a continuous color: red (0) ->
+    // yellow (50) -> green (100), rather than 3 hard buckets where e.g. a
+    // score of 51 and 79 were previously visually identical.
+    _shiScoreToColor(score) {
+        const red = Cesium.Color.fromCssColorString('#ef4444');
+        const yellow = Cesium.Color.fromCssColorString('#eab308');
+        const green = Cesium.Color.fromCssColorString('#22c55e');
+        const t = Math.max(0, Math.min(100, score)) / 100;
+        const result = new Cesium.Color();
+        if (t < 0.5) {
+            Cesium.Color.lerp(red, yellow, t / 0.5, result);
+        } else {
+            Cesium.Color.lerp(yellow, green, (t - 0.5) / 0.5, result);
+        }
+        return result;
+    }
+
+    // Removes the Global SHI country-color heatmap from the globe. Called
+    // both here (to clear the previous render before drawing a new one)
+    // and from ui.js's switchTab() whenever the global-shi tab isn't the
+    // active one — that second call site is what was missing before:
+    // this layer was turned on by loadGlobalShi() but had no
+    // corresponding teardown when navigating to a different tab, so the
+    // country colors stayed visible everywhere until the panel happened
+    // to reload. Every other globe layer already had this teardown
+    // wired in (see resetActiveLayers() and switchTab()'s snapshotViewer
+    // handling) — this was the one gap.
+    clearGlobalShiHeatmap() {
         if (this.layers.globalShi) {
             this.viewer.dataSources.remove(this.layers.globalShi);
             this.layers.globalShi = null;
         }
+    }
+
+    async renderGlobalShiHeatmap(countries) {
+        this.clearGlobalShiHeatmap();
 
         const boundaries = await api.getCountryBoundaries();
         if (!boundaries || !boundaries.features) return;
@@ -1510,14 +1473,20 @@ class GlobeManager {
                 continue;
             }
 
-            let color = Cesium.Color.fromCssColorString('#ef4444'); // Poor
-            if (shiInfo.shi >= 80) color = Cesium.Color.fromCssColorString('#22c55e'); // Healthy
-            else if (shiInfo.shi >= 50) color = Cesium.Color.fromCssColorString('#eab308'); // Moderate
+            const color = this._shiScoreToColor(shiInfo.shi);
+            const componentCount = shiInfo.component_count || (shiInfo.components_used || []).length;
+
+            // Coverage/confidence cue: a score backed by only 1 of 4 real
+            // sources reads as visually "thinner" (lower fill opacity)
+            // than one backed by all 4 — a 1-component and 4-component
+            // country no longer look identically confident just because
+            // their scores happen to land in the same range.
+            const coverageAlpha = 0.3 + (componentCount / 4) * 0.4; // 0.4 (1/4) .. 0.7 (4/4)
 
             if (entity.polygon) {
-                entity.polygon.material = color.withAlpha(0.55);
+                entity.polygon.material = color.withAlpha(coverageAlpha);
                 entity.polygon.outline = true;
-                entity.polygon.outlineColor = Cesium.Color.WHITE.withAlpha(0.3);
+                entity.polygon.outlineColor = Cesium.Color.WHITE.withAlpha(componentCount >= 4 ? 0.5 : 0.2);
             }
 
             entity._customData = {
@@ -1526,10 +1495,12 @@ class GlobeManager {
                 details: {
                     "SHI Score": `${shiInfo.shi}/100`,
                     "Risk Level": shiInfo.risk,
+                    "Real Data Coverage": `${componentCount} of 4 sources`,
                     "Real Components Used": (shiInfo.components_used || []).join(', '),
-                    ...(shiInfo.components?.air_quality ? {"Air Quality Component": `${shiInfo.components.air_quality.value}/100`} : {}),
-                    ...(shiInfo.components?.climate_stability ? {"Climate Component": `${shiInfo.components.climate_stability.value}/100`} : {}),
-                    ...(shiInfo.components?.vegetation ? {"Vegetation Component": `${shiInfo.components.vegetation.value}/100`} : {}),
+                    ...(shiInfo.components?.air_quality ? {"Air Quality": `${shiInfo.components.air_quality.value}/100 (weight ${Math.round(shiInfo.components.air_quality.weight * 100)}%)`} : {}),
+                    ...(shiInfo.components?.emissions ? {"Climate/Emissions": `${shiInfo.components.emissions.value}/100 (weight ${Math.round(shiInfo.components.emissions.weight * 100)}%)`} : {}),
+                    ...(shiInfo.components?.health ? {"Health Outcomes": `${shiInfo.components.health.value}/100 (weight ${Math.round(shiInfo.components.health.weight * 100)}%)`} : {}),
+                    ...(shiInfo.components?.vegetation ? {"Vegetation": `${shiInfo.components.vegetation.value}/100 (weight ${Math.round(shiInfo.components.vegetation.weight * 100)}%)`} : {}),
                     "Real Stations Sampled": shiInfo.station_count
                 }
             };

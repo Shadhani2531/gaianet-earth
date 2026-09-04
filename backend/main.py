@@ -16,7 +16,7 @@ if curr_dir not in sys.path:
 # environment variables at import time.
 load_dotenv(os.path.join(curr_dir, ".env"))
 
-from services import nasa_firms, modis_ndvi, climate, mock_data, weather, scenario_engine, openaq_client, country_coords, alerts, forecast, wildfire_risk, gaia_agent, impact_report
+from services import nasa_firms, modis_ndvi, climate, mock_data, weather, scenario_engine, openaq_client, country_coords, alerts, forecast, wildfire_risk, gaia_agent, impact_report, worldbank_client, who_gho_client, shi_composite
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -116,19 +116,22 @@ _COMPOSITE_SHI_CACHE_SECONDS = 6 * 3600
 def shi_global():
     """
     Tab 6 — Global SHI Heatmap. Real, live composite Sustainability Health
-    Index per country, combining three real data sources:
-      - Air quality: real OpenAQ v3 station PM2.5, averaged per country
-      - Climate: real Open-Meteo temperature anomaly at the country's
-        capital (used as a representative point — see country_coords.py)
-      - Vegetation: real NASA MODIS NDVI at the same representative point
+    Index per country, combining four real data sources with EPI-style
+    (Yale/Columbia Environmental Performance Index) methodology — see
+    services/shi_composite.py for the full scoring approach:
+      - Air quality (40%): OpenAQ v3 real station PM2.5
+      - Climate/Emissions (25%): World Bank real CO2 emissions per capita
+      - Health Outcomes (20%): WHO GHO real life expectancy at birth
+      - Vegetation (15%): NASA MODIS real NDVI at a capital-city reference point
 
     No hardcoded or fabricated per-country numbers anywhere in this
-    endpoint. Every component that couldn't be computed from real data
-    for a given country is OMITTED from that country's composite, not
-    backfilled with a guess — and the response says exactly which
-    components each country's score is built from.
+    endpoint. A country missing one or more components has that
+    component's weight redistributed across the ones it does have,
+    rather than either guessing a value or comparing it unfairly against
+    countries scored on a different number of components.
 
-    Requires OPENAQ_API_KEY in backend/.env (see .env.example).
+    Requires OPENAQ_API_KEY in backend/.env (see .env.example). The
+    World Bank and WHO GHO sources need no key at all.
     """
     if not os.environ.get("OPENAQ_API_KEY", "").strip():
         return {
@@ -142,111 +145,11 @@ def shi_global():
             and (now - _composite_shi_cache["computed_at"]) < _COMPOSITE_SHI_CACHE_SECONDS):
         return _composite_shi_cache["data"]
 
-    aggregate = openaq_client.get_country_aqi_aggregate()
-    if not aggregate:
-        reason = openaq_client.get_last_openaq_error()
-        message = "Could not fetch real OpenAQ data right now. Try again shortly."
-        if reason:
-            message += f" (reason: {reason})"
-        return {
-            "countries": [],
-            "status": "no_data",
-            "message": message,
-            "debug_reason": reason
-        }
+    response = shi_composite.compute_global_shi()
 
-    results = []
-    for code, info in aggregate.items():
-        pm25 = info["avg_pm25"]
-        aqi = scenario_engine._pm25_to_aqi(pm25)
-        aqi_shi = max(0, min(100, 100 - (aqi / 3)))
-
-        components = {
-            "air_quality": {
-                "value": aqi_shi,
-                "weight": 1.0,  # adjusted below if other components are present
-                "basis": f"Real OpenAQ v3 data, {info['station_count']} station(s) sampled, avg PM2.5 {pm25} µg/m³"
-            }
-        }
-
-        # --- Climate component (real Open-Meteo, at country capital) ---
-        ref_point = country_coords.get_country_reference_point(code)
-        climate_shi = None
-        ndvi_shi = None
-        is_tropical = True
-
-        if ref_point:
-            is_tropical = ref_point["is_tropical"]
-            try:
-                climate_info = climate.get_location_climate(ref_point["lat"], ref_point["lon"])
-                anomaly = abs(climate_info.get("current_anomaly", 0))
-                # Real, simple mapping: larger temperature anomaly -> lower
-                # climate-stability score. This weighting choice (anomaly of
-                # 3C or more = 0 score) is a modeling decision, not itself a
-                # citation — flagged as such in the basis string.
-                climate_shi = max(0, min(100, 100 - (anomaly / 3.0) * 100))
-                components["climate_stability"] = {
-                    "value": round(climate_shi, 1),
-                    "weight": 1.0,
-                    "basis": f"Real Open-Meteo climate data at {ref_point['capital']} "
-                             f"(country capital, used as representative point); "
-                             f"anomaly {climate_info.get('current_anomaly')}°C. "
-                             f"Anomaly-to-score mapping is a modeling choice, not a cited standard."
-                }
-            except Exception as e:
-                logger.warning(f"Climate component failed for {code}: {e}")
-
-            try:
-                ndvi_info = modis_ndvi.get_ndvi_at_location(ref_point["lat"], ref_point["lon"])
-                ndvi_val = ndvi_info.get("ndvi", 0)
-                # Real NDVI mapped to a 0-100 score: NDVI ranges roughly
-                # -1 (water/barren) to +1 (dense vegetation); we rescale
-                # the practical 0-0.9 range that covers most land surfaces.
-                ndvi_shi = max(0, min(100, (ndvi_val / 0.9) * 100))
-                components["vegetation"] = {
-                    "value": round(ndvi_shi, 1),
-                    "weight": 1.0,
-                    "basis": f"{'Real NASA MODIS NDVI' if ndvi_info.get('data_source') == 'real_modis' else 'Estimated NDVI (MODIS unavailable for this point)'} "
-                             f"at {ref_point['capital']}, value {ndvi_info.get('ndvi')}",
-                    "confidence": "measured" if ndvi_info.get("data_source") == "real_modis" else "estimated"
-                }
-            except Exception as e:
-                logger.warning(f"NDVI component failed for {code}: {e}")
-
-        # --- Composite: simple average of whichever real components exist ---
-        component_values = [c["value"] for c in components.values()]
-        composite_shi = sum(component_values) / len(component_values)
-
-        grade = 'A' if composite_shi >= 80 else ('B' if composite_shi >= 60 else ('C' if composite_shi >= 40 else 'D'))
-        risk = 'Healthy' if composite_shi >= 80 else ('Moderate' if composite_shi >= 50 else 'Poor')
-
-        results.append({
-            "country_code": code,
-            "country_name": info["country_name"],
-            "shi": int(round(composite_shi)),
-            "grade": grade,
-            "risk": risk,
-            "components": components,
-            "components_used": list(components.keys()),
-            "station_count": info["station_count"],
-        })
-
-    results.sort(key=lambda r: r["shi"], reverse=True)
-
-    response = {
-        "countries": results,
-        "status": "ok",
-        "sampled_country_count": len(results),
-        "note": "SHI is a composite of real, live data: air quality (OpenAQ v3, always included when available), "
-                "climate stability (Open-Meteo, at the country's capital as a representative point), and "
-                "vegetation health (NASA MODIS NDVI, same representative point). Countries not listed had no "
-                "sampled real air-quality stations. A country's 'components_used' field shows exactly which "
-                "real data sources contributed to its score — components that could not be computed from real "
-                "data are omitted, never guessed."
-    }
-
-    _composite_shi_cache["data"] = response
-    _composite_shi_cache["computed_at"] = now
+    if response.get("status") == "ok":
+        _composite_shi_cache["data"] = response
+        _composite_shi_cache["computed_at"] = now
 
     return response
 
@@ -425,19 +328,20 @@ def get_prediction(
     }
 
 # --- CITIZEN SCIENCE REPORTING ---
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
+from typing import Literal
 from sqlalchemy.orm import Session
 from fastapi import Depends
 from database import get_db, Report as DBReport
 
 class ReportCreate(BaseModel):
-    lat: float
-    lon: float
-    incident_type: str
-    severity: int
-    description: str
-    reporter_name: str = "Anonymous"
-    reporter_email: str | None = None
+    lat: float = Field(..., ge=-90, le=90)
+    lon: float = Field(..., ge=-180, le=180)
+    incident_type: Literal["Fire", "Pollution", "Deforestation", "Water", "Flooding", "Other"]
+    severity: int = Field(..., ge=1, le=5)
+    description: str = Field(..., min_length=1, max_length=2000)
+    reporter_name: str = Field("Anonymous", max_length=200)
+    reporter_email: str | None = Field(None, max_length=320)
 
 
 class GaiaChatMessage(BaseModel):

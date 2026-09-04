@@ -4,16 +4,17 @@ This document is meant to be read alongside the actual code, not instead of it �
 
 ---
 
-## Current Tab Structure (5 tabs, live in `index.html`)
+## Current Tab Structure (6 tabs, live in `index.html`)
 
 1. **🌍 Earth** — Immersive CesiumJS globe with live NASA GIBS satellite imagery and auto-rotate.
 2. **📍 Insight** — Click anywhere on the globe (or search a place) for real climate/AQI/CO₂/NDVI analytics at that point.
-3. **🧠 Prediction / Forecast Lab** — Real multi-day weather + AQI forecasts, the rule-based wildfire-risk score, and the "what-if" scenario simulator.
-4. **📢 Reports** — Citizen incident reporting (right-click the globe), cross-checked against real NASA FIRMS wildfire detections.
-5. **🌐 Global Health Index** — Country-level composite Sustainability Health Index built from real OpenAQ + Open-Meteo + MODIS data at each country's capital.
+3. **🕐 Historical Timeline** — Scrub or play through 2000–present via flat NASA GIBS Snapshot API images (`js/snapshot-viewer.js`), with a split-compare mode and four curated preset locations (Amazon, Aral Sea, Dubai, Greenland). See below for why this isn't Cesium imagery layers anymore.
+4. **🧠 Prediction / Forecast Lab** — Real multi-day weather + AQI forecasts, the rule-based wildfire-risk score, and the "what-if" scenario simulator.
+5. **📢 Reports** — Citizen incident reporting (select a location on the globe, then "Submit a Report" in the sidebar — no right-click gesture), cross-checked against real NASA FIRMS wildfire detections.
+6. **🌐 Global Health Index** — Country-level composite Sustainability Health Index built from real OpenAQ + Open-Meteo + MODIS data at each country's capital.
 
 ### About the Historical Timeline / "4D Temporal Engine" tab
-An earlier version of this project had a 6th tab for historical satellite-imagery playback with a time slider. **It's currently removed from navigation** — the imagery-layer state didn't settle correctly when the tab activated, and it needs a proper rebuild rather than another patch (see the comment in `index.html` right above the tab-nav markup). The panel HTML and its handling in `js/ui.js` (`case 'temporal':`) are intentionally left in place so a real fix has something to build on, but the tab is not reachable from the UI today. Treat any older doc, screenshot, or memory of a working time slider as **not current**.
+This used to drive live Cesium WMTS imagery layers (NASA GIBS tiles) directly on the 3D globe, swapping a new layer in on every date change. That caused visible glitching — tiles popping in and out, rendering instability — because every tab shares the *same* Cesium scene, so churning imagery layers on it destabilized rendering globally, not just on this tab. It's been rebuilt from scratch: `js/snapshot-viewer.js` now renders flat images from NASA's Worldview Snapshot API (`wvs.earthdata.nasa.gov/api/v1/snapshot`) in its own panel, and never touches the globe's imagery layers at all. The old approach (`toggleSatelliteView`, `updateTime`, `refreshImageryLayers`, `refreshNdviImagery`, `refreshSatelliteImagery`, `toggleSplitScreen`) has been removed from `js/globe.js` entirely rather than left as dead weight. Trade-off: this is a raw satellite snapshot per date, not a cloud-free composite the way Google's Timelapse tool is — some dates may show cloud cover, and the UI says so.
 
 ---
 

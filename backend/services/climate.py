@@ -304,12 +304,20 @@ def get_wind_geojson() -> Dict[str, Any]:
 def get_location_climate(lat: float, lon: float) -> Dict[str, Any]:
     """Provides time-series data using live Open-Meteo data."""
     history, is_real = get_live_climate_trends(lat, lon)
-    
-    # Calculate current anomaly (vs last 6 months avg)
-    all_temps: List[float] = [float(h["avg_temp_c"]) for h in history if h["avg_temp_c"] != 0]
-    avg_6m = sum(all_temps) / len(all_temps) if all_temps else 20.0
-    current_temp = float(history[-1]["avg_temp_c"]) if history else 20.0
-    anomaly = round(current_temp - avg_6m, 2)
+
+    # Anomaly = real current temperature vs. a climatological baseline for
+    # this latitude and month — the same _expected_seasonal_temp() model
+    # get_climate_geojson() (the map layer) already uses. This used to
+    # compare against a naive 6-month rolling average instead, which
+    # mostly just measures the ordinary seasonal cycle rather than a real
+    # anomaly: a summer reading compared against a 6-month average that
+    # includes winter months produces a large number that isn't unusual
+    # at all, just seasonal. Fixed to use the real baseline model so this
+    # stat and the map layer's anomaly mean the same thing.
+    current_temp = float(history[-1]["avg_temp_c"]) if history and history[-1]["avg_temp_c"] != 0 else 20.0
+    current_month = datetime.now(timezone.utc).month
+    baseline = _expected_seasonal_temp(lat, current_month)
+    anomaly = round(current_temp - baseline, 2)
 
     return {
         "location": {"lat": lat, "lon": lon},

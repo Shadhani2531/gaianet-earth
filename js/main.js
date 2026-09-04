@@ -8,6 +8,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     // Initialize Globe
     window.globeManager = new GlobeManager();
+    window.snapshotViewer = new SnapshotViewer();
     window.ui = new UIManager();
 
     // Trigger default state

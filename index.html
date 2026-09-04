@@ -69,13 +69,15 @@
         <div class="tab-item" data-tab="insight" title="Climate Insight">
             <i class="fa-solid fa-satellite"></i>
         </div>
-        <!-- "Historical Timeline" (data-tab="temporal") removed from
-             navigation — it was glitching (satellite imagery layer state
-             not settling correctly on tab entry) and needs a proper
-             rebuild rather than a patch. The panel markup and its logic
-             in js/ui.js (case 'temporal':) are left in place, untouched,
-             so that rebuild has something real to start from instead of
-             starting over from nothing. -->
+        <!-- "Historical Timeline" now uses flat NASA GIBS snapshot images
+             (js/snapshot-viewer.js) instead of live-swapped Cesium imagery
+             layers — the earlier tile-layer approach caused visible
+             glitching (rapid layer add/remove) that bled into other tabs
+             since it mutated the one shared 3D scene every other tab also
+             renders on. This panel never touches the globe. -->
+        <div class="tab-item" data-tab="temporal" title="Historical Timeline">
+            <i class="fa-solid fa-clock-rotate-left"></i>
+        </div>
         <div class="tab-item" data-tab="prediction" title="Forecast Lab">
             <i class="fa-solid fa-brain"></i>
         </div>
@@ -219,6 +221,12 @@
         <!-- Center: 3D Globe -->
         <section class="center-panel">
             <div id="cesiumContainer"></div>
+
+            <!-- Shows whether the rain/snow/cloud visuals are driven by live
+                 OpenWeatherMap data or the labeled deterministic mock used
+                 when OPENWEATHERMAP_API_KEY is unset. Updated by
+                 UIManager's 'weatherSynced' listener in js/ui.js. -->
+            <div id="ase-status-badge" class="ase-status-badge hidden" title=""></div>
             
             <!-- Sensor Info Popup -->
             <div id="sensor-popup" class="sensor-popup glass-panel hidden">
@@ -271,6 +279,7 @@
                 <div class="data-node">
                     <span class="label">Temp Anomaly</span>
                     <span class="value" id="node-anomaly">--°C</span>
+                    <span class="data-node-sub" id="node-anomaly-sub"></span>
                 </div>
             </div>
             <div class="chart-container" style="height: 140px;">
@@ -362,42 +371,181 @@
 
         <!-- Screen 6: Community Reports Feed -->
         <aside id="reports-panel" class="panel right-panel glass-panel hidden">
-            <h2><i class="fa-solid fa-bullhorn"></i> Global Ground-Truth</h2>
-            <div id="reports-feed" class="reports-feed">
-                <!-- Dynamic reports injected here -->
-                <p class="text-secondary small">Syncing live community incidents...</p>
+            <div class="panel-header-row">
+                <h2><i class="fa-solid fa-bullhorn"></i> <span>Global Ground-Truth</span></h2>
+                <button id="close-reports-panel" class="panel-collapse-btn" title="Collapse panel" aria-label="Collapse panel">
+                    <i class="fa-solid fa-chevron-right"></i>
+                </button>
+            </div>
+
+            <!-- Sub-tab switcher — mutually exclusive, matching the SHI
+                 panel's section styling but behaving as true tabs (only
+                 one body visible at a time) rather than independent
+                 accordions. -->
+            <div class="reports-subtabs">
+                <button class="reports-subtab-btn active" id="reports-subtab-info-btn" data-subtab="info">
+                    <i class="fa-solid fa-circle-info"></i> Info
+                </button>
+                <button class="reports-subtab-btn" id="reports-subtab-submit-btn" data-subtab="submit">
+                    <i class="fa-solid fa-plus"></i> Submit Report
+                </button>
+            </div>
+
+            <!-- Info sub-tab: legend + live feed -->
+            <div class="reports-subtab-body" id="reports-subtab-info" data-subtab-body="info">
+                <div class="reports-legend">
+                    <span class="reports-legend-item"><span class="dot" style="background:#ff4500"></span>Fire</span>
+                    <span class="reports-legend-item"><span class="dot" style="background:#a020f0"></span>Pollution</span>
+                    <span class="reports-legend-item"><span class="dot" style="background:#32cd32"></span>Deforestation</span>
+                    <span class="reports-legend-item"><span class="dot" style="background:#1e90ff"></span>Water</span>
+                    <span class="reports-legend-item"><span class="dot" style="background:#4169e1"></span>Flooding</span>
+                    <span class="reports-legend-item"><span class="dot" style="background:#ffff00"></span>Other</span>
+                </div>
+
+                <div id="reports-feed" class="reports-feed">
+                    <!-- Dynamic reports injected here -->
+                    <p class="text-secondary small">Syncing live community incidents...</p>
+                </div>
+            </div>
+
+            <!-- Submit Report sub-tab: the form that used to live in a
+                 floating #report-modal. Same field ids, same submit
+                 handler in ui.js — only the container changed. -->
+            <div class="reports-subtab-body hidden" id="reports-subtab-submit" data-subtab-body="submit">
+                <p class="reports-panel-hint">Uses your currently selected location — click a spot on the globe first.</p>
+
+                <form id="report-form">
+                    <div class="form-group">
+                        <label>Incident Type</label>
+                        <div class="segmented-picker segmented-picker-wrap">
+                            <input type="radio" name="incident-type" value="Fire" id="type-fire" checked>
+                            <label for="type-fire">🔥 Fire/Smoke</label>
+
+                            <input type="radio" name="incident-type" value="Pollution" id="type-pollution">
+                            <label for="type-pollution">🌫️ Air Pollution</label>
+
+                            <input type="radio" name="incident-type" value="Deforestation" id="type-logging">
+                            <label for="type-logging">🌲 Deforestation</label>
+
+                            <input type="radio" name="incident-type" value="Water" id="type-water">
+                            <label for="type-water">💧 Water Pollution</label>
+
+                            <input type="radio" name="incident-type" value="Flooding" id="type-flooding">
+                            <label for="type-flooding">🌊 Flooding</label>
+
+                            <input type="radio" name="incident-type" value="Other" id="type-other">
+                            <label for="type-other">❓ Other</label>
+                        </div>
+                    </div>
+
+                    <div class="form-group">
+                        <label>Your Name</label>
+                        <input type="text" id="reporter-name" placeholder="Anonymous" maxlength="60">
+                    </div>
+
+                    <div class="form-group">
+                        <label>Email <span class="form-optional">(optional — for follow-up only, never shown publicly)</span></label>
+                        <input type="email" id="reporter-email" placeholder="you@example.com">
+                    </div>
+
+                    <div class="form-group">
+                        <label>Severity Level: <span id="severity-val">3</span></label>
+                        <input type="range" id="report-severity" min="1" max="5" step="1" value="3" class="timeline-slider">
+                        <div class="severity-labels">
+                            <span>Low</span>
+                            <span>Critical</span>
+                        </div>
+                    </div>
+
+                    <div class="form-group">
+                        <label>Description</label>
+                        <textarea id="report-description" rows="3" placeholder="Provide real-time details..." required></textarea>
+                    </div>
+
+                    <div class="report-location-info">
+                        <i class="fa-solid fa-location-crosshairs"></i> <span id="report-coords">0, 0</span>
+                    </div>
+
+                    <button type="submit" class="btn primary-btn w-full">
+                        <i class="fa-solid fa-paper-plane"></i> TRANSMIT REPORT
+                    </button>
+                </form>
             </div>
         </aside>
 
         <!-- Screen 7: Global SHI Heatmap -->
         <aside id="global-shi-panel" class="panel right-panel glass-panel hidden">
-            <h2>
-                <i class="fa-solid fa-globe"></i> Global Health Index
-                <span class="info-icon-wrap">
-                    <i class="fa-solid fa-circle-info info-icon"></i>
-                    <span class="info-icon-tooltip">Computed live from real OpenAQ air-quality stations. Countries with no data are left unshaded, never guessed.</span>
-                </span>
-            </h2>
+            <div class="panel-header-row">
+                <h2><i class="fa-solid fa-globe"></i> <span>Global Health Index</span></h2>
+                <button id="close-global-shi" class="panel-collapse-btn" title="Collapse panel" aria-label="Collapse panel">
+                    <i class="fa-solid fa-chevron-right"></i>
+                </button>
+            </div>
             <p class="global-shi-sub">Country-level Sustainability Health Index.</p>
 
             <div id="global-shi-status" class="global-shi-status hidden"></div>
 
-            <div class="shi-legend">
-                <div class="shi-legend-item"><span class="swatch swatch-healthy"></span> Healthy (80+)</div>
-                <div class="shi-legend-item"><span class="swatch swatch-moderate"></span> Moderate (50-79)</div>
-                <div class="shi-legend-item"><span class="swatch swatch-poor"></span> Poor (&lt;50)</div>
-                <div class="shi-legend-item"><span class="swatch swatch-nodata"></span> No data</div>
+            <!-- Legend & methodology — collapsible so it doesn't compete
+                 for space with the ranking list once expanded. -->
+            <div class="shi-section" id="shi-legend-section">
+                <button class="shi-section-header" id="shi-legend-toggle" aria-expanded="true">
+                    <span><i class="fa-solid fa-circle-info"></i> Legend &amp; Methodology</span>
+                    <i class="fa-solid fa-chevron-up shi-section-chevron"></i>
+                </button>
+                <div class="shi-section-body" id="shi-legend-body">
+                    <div class="legend-item">
+                        <div class="gradient-bar" style="background: linear-gradient(to right, #ef4444, #eab308, #22c55e)"></div>
+                        <div class="legend-values"><span>Poor (0)</span><span>Moderate (50)</span><span>Healthy (100)</span></div>
+                    </div>
+                    <div class="shi-legend-item"><span class="swatch swatch-nodata"></span> No data (left unshaded)</div>
+                    <p class="shi-methodology-note">
+                        The Global Sustainability Health Index is calculated from four independent
+                        data sources: air quality (OpenAQ), carbon emissions per capita (World Bank),
+                        life expectancy (WHO), and vegetation cover (NASA MODIS). Each country's score
+                        reflects its standing relative to the full range of values observed across all
+                        sampled countries. Country coverage varies by data source; scores are weighted
+                        proportionally across the components for which real data is available.
+                    </p>
+                </div>
             </div>
 
-            <h3 class="global-shi-ranking-title">Rankings</h3>
-            <div id="global-shi-ranking" class="global-shi-ranking">
-                <p class="text-secondary small">Loading real station data...</p>
+            <!-- Rankings -->
+            <div class="shi-section" id="shi-ranking-section">
+                <button class="shi-section-header" id="shi-ranking-toggle" aria-expanded="true">
+                    <span><i class="fa-solid fa-list-ol"></i> Rankings</span>
+                    <i class="fa-solid fa-chevron-up shi-section-chevron"></i>
+                </button>
+                <div class="shi-section-body" id="shi-ranking-body">
+                    <div id="global-shi-ranking" class="global-shi-ranking">
+                        <p class="text-secondary small">Loading real station data...</p>
+                    </div>
+                </div>
             </div>
         </aside>
     </main>
 
-    <!-- 4D Temporal Engine Overlay -->
-    <div id="split-divider" class="split-divider hidden"></div>
+    <!-- 4D Temporal Engine — flat NASA GIBS snapshot images, not live
+         Cesium imagery layers. The 3D globe underneath is never touched
+         while this panel is open; see js/snapshot-viewer.js. Two modes:
+         "scrub" crossfades #snapshot-primary/#snapshot-comparison via
+         opacity as the timeline slider moves, "split" reveals both side
+         by side with a draggable clip-path handle. -->
+    <div id="snapshot-viewer" class="snapshot-viewer glass-panel hidden">
+        <div class="snapshot-viewer-header">
+            <span id="snapshot-location-name">--</span>
+            <span id="snapshot-year-badge" class="snapshot-year-badge">--</span>
+        </div>
+        <div class="snapshot-viewer-frame">
+            <img id="snapshot-primary" class="snapshot-img" alt="">
+            <div id="snapshot-split-clip" class="snapshot-split-clip hidden">
+                <img id="snapshot-comparison" class="snapshot-img" alt="">
+            </div>
+            <div id="snapshot-split-handle" class="snapshot-split-handle hidden">
+                <div class="snapshot-split-grip"><i class="fa-solid fa-arrows-left-right"></i></div>
+            </div>
+            <div id="snapshot-loading" class="snapshot-loading hidden">Loading imagery…</div>
+        </div>
+    </div>
 
     <!-- Curated timelapse starting points -->
     <div id="timelapse-presets" class="timelapse-presets glass-panel hidden">
@@ -459,71 +607,10 @@
         </div>
     </footer>
 
-    <!-- Citizen Science Reporting Modal (Liquid Glass Refinement) -->
-    <div id="report-modal" class="modal-overlay hidden">
-        <div class="modal-content glass-panel shimmer-edge">
-            <div class="modal-header">
-                <h2><i class="fa-solid fa-bullhorn"></i> Ground-Truth Report</h2>
-                <button id="close-report-modal" class="icon-btn"><i class="fa-solid fa-xmark"></i></button>
-            </div>
-            <form id="report-form">
-                <div class="form-group">
-                    <label>Incident Type</label>
-                    <div class="segmented-picker segmented-picker-wrap">
-                        <input type="radio" name="incident-type" value="Fire" id="type-fire" checked>
-                        <label for="type-fire">🔥 Fire/Smoke</label>
-
-                        <input type="radio" name="incident-type" value="Pollution" id="type-pollution">
-                        <label for="type-pollution">🌫️ Air Pollution</label>
-
-                        <input type="radio" name="incident-type" value="Deforestation" id="type-logging">
-                        <label for="type-logging">🌲 Deforestation</label>
-
-                        <input type="radio" name="incident-type" value="Water" id="type-water">
-                        <label for="type-water">💧 Water Pollution</label>
-
-                        <input type="radio" name="incident-type" value="Flooding" id="type-flooding">
-                        <label for="type-flooding">🌊 Flooding</label>
-
-                        <input type="radio" name="incident-type" value="Other" id="type-other">
-                        <label for="type-other">❓ Other</label>
-                    </div>
-                </div>
-
-                <div class="form-group">
-                    <label>Your Name</label>
-                    <input type="text" id="reporter-name" placeholder="Anonymous" maxlength="60">
-                </div>
-
-                <div class="form-group">
-                    <label>Email <span class="form-optional">(optional — for follow-up only, never shown publicly)</span></label>
-                    <input type="email" id="reporter-email" placeholder="you@example.com">
-                </div>
-
-                <div class="form-group">
-                    <label>Severity Level: <span id="severity-val">3</span></label>
-                    <input type="range" id="report-severity" min="1" max="5" step="1" value="3" class="timeline-slider">
-                    <div class="severity-labels">
-                        <span>Low</span>
-                        <span>Critical</span>
-                    </div>
-                </div>
-
-                <div class="form-group">
-                    <label>Description</label>
-                    <textarea id="report-description" rows="3" placeholder="Provide real-time details..." required></textarea>
-                </div>
-
-                <div class="report-location-info">
-                    <i class="fa-solid fa-location-crosshairs"></i> <span id="report-coords">0, 0</span>
-                </div>
-
-                <button type="submit" class="btn primary-btn w-full">
-                    <i class="fa-solid fa-paper-plane"></i> TRANSMIT REPORT
-                </button>
-            </form>
-        </div>
-    </div>
+    <!-- Citizen Science Reporting form used to live here as a floating
+         modal. Moved into #reports-panel's "Submit Report" sub-tab
+         (js/ui.js's initReportsSubtabs()) so it stays contained within
+         the sidebar instead of opening an external floating window. -->
 
     <!-- Ask Gaia (Phase 3): floating button + chat panel, available on
          every tab (kept outside the tab-visibility system deliberately —
@@ -563,9 +650,10 @@
     <script src="js/config.js"></script>
     <script src="js/state.js"></script>
     <script src="js/api.js?v=3"></script>
-    <script src="js/ui.js?v=5"></script>
+    <script src="js/ui.js?v=15"></script>
     <script src="js/weather.js"></script>
-    <script src="js/globe.js?v=4"></script>
+    <script src="js/snapshot-viewer.js"></script>
+    <script src="js/globe.js?v=11"></script>
     <script src="js/gaia.js?v=3"></script>
     <script src="js/report.js"></script>
     <script src="js/main.js"></script>

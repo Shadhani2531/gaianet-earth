@@ -12,6 +12,7 @@ class UIManager {
         this.initSecondaryEvents();
         this.initSearch();
         this.initPanelCollapse();
+        this.initShiSectionToggles();
 
         // Keep the Tab 4 What-If panel's location/biome display in sync
         // with whatever point is currently selected on the globe, however
@@ -38,6 +39,8 @@ class UIManager {
         const panels = [
             { panelId: 'left-panel', btnId: 'left-panel-collapse', collapseIcon: 'fa-chevron-left', expandIcon: 'fa-chevron-right' },
             { panelId: 'right-panel', btnId: 'right-panel-collapse', collapseIcon: 'fa-chevron-right', expandIcon: 'fa-chevron-left' },
+            { panelId: 'global-shi-panel', btnId: 'close-global-shi', collapseIcon: 'fa-chevron-right', expandIcon: 'fa-chevron-left' },
+            { panelId: 'reports-panel', btnId: 'close-reports-panel', collapseIcon: 'fa-chevron-right', expandIcon: 'fa-chevron-left' },
         ];
 
         panels.forEach(({ panelId, btnId, collapseIcon, expandIcon }) => {
@@ -58,11 +61,81 @@ class UIManager {
         });
     }
 
+    // Collapsible sections inside the Global SHI panel (Legend &
+    // Methodology, Rankings) — the globe itself is never touched by
+    // this, same as the Insight tab's panel doesn't affect the globe.
+    initShiSectionToggles() {
+        const sections = ['shi-legend', 'shi-ranking'];
+        sections.forEach(id => {
+            const toggle = document.getElementById(`${id}-toggle`);
+            const section = document.getElementById(`${id}-section`);
+            if (!toggle || !section) return;
+
+            toggle.addEventListener('click', () => {
+                const isCollapsed = section.classList.toggle('collapsed');
+                toggle.setAttribute('aria-expanded', String(!isCollapsed));
+            });
+        });
+    }
+
+    // Global Ground-Truth panel's two sub-tabs: Info (legend + live feed)
+    // and Submit Report (the form, moved in from the old floating
+    // #report-modal). Unlike the SHI panel's independently-collapsible
+    // sections, these are mutually exclusive — true tabs, only one body
+    // visible at a time — since showing the feed and the submission form
+    // together in a narrow sidebar doesn't read well.
+    initReportsSubtabs() {
+        document.querySelectorAll('.reports-subtab-btn').forEach(btn => {
+            btn.addEventListener('click', () => this.switchReportsSubtab(btn.dataset.subtab));
+        });
+    }
+
+    switchReportsSubtab(subtab) {
+        document.querySelectorAll('.reports-subtab-btn').forEach(btn => {
+            btn.classList.toggle('active', btn.dataset.subtab === subtab);
+        });
+        document.querySelectorAll('.reports-subtab-body').forEach(body => {
+            body.classList.toggle('hidden', body.dataset.subtabBody !== subtab);
+        });
+
+        // Populate the coordinate readout at the moment the form becomes
+        // visible — same "use whatever's currently selected" behavior
+        // the old openReportModal event provided, just triggered by a
+        // sub-tab switch instead of a modal open.
+        if (subtab === 'submit') {
+            const loc = AppState.selectedLocation ?? CONFIG.DEFAULT_COORDINATES;
+            const coordsEl = document.getElementById('report-coords');
+            if (coordsEl) coordsEl.innerText = `${loc.lat.toFixed(4)}, ${loc.lon.toFixed(4)}`;
+        }
+    }
+
+    // Single registry of "things that must never leak between tabs."
+    // switchTab() runs every entry here unconditionally on every call,
+    // then its switch-case re-enables exactly what the target tab needs
+    // (e.g. case 'global-shi' calls loadGlobalShi(), which re-renders the
+    // heatmap this teardown just cleared). Add new tab-specific globe
+    // layers or transient UI state here, not as a one-off conditional in
+    // switchTab — that's what let the Global SHI heatmap go untorn-down
+    // for as long as it did.
+    static TAB_SCOPED_TEARDOWN = {
+        temporalSnapshot: () => {
+            document.getElementById('story-readout')?.classList.add('hidden');
+            document.querySelectorAll('.preset-chip').forEach(c => c.classList.remove('active'));
+            window.snapshotViewer?.hide();
+        },
+        globalShiHeatmap: () => {
+            window.globeManager?.clearGlobalShiHeatmap();
+        },
+        reportMarkers: () => {
+            window.globeManager?.setReportsVisible(false);
+        },
+    };
+
     // Single source for what each layer's legend entry looks like.
     // Satellite View is intentionally absent — it's real imagery, not a
     // severity scale, so it never gets a legend entry.
     static LAYER_LEGEND_CONFIG = {
-        'layer-temp': { label: 'Temperature (Anomaly)', type: 'gradient', stops: ['#2c6f8e', '#d8b23a', '#a12c2c'], words: ['Cold', 'Extreme'] },
+        'layer-temp': { label: 'Temperature Anomaly (vs. seasonal baseline)', type: 'gradient', stops: ['#08306b', '#6bafd6', '#e6e6e6', '#fd8d3c', '#a50f15'], words: ['-4°C', '-2°C', '0°C', '+2°C', '+4°C'], subLabel: 'Colder ←—— Average ——→ Warmer' },
         'layer-ndvi': { label: 'Vegetation (NDVI)', type: 'gradient', stops: ['#a16207', '#84cc16', '#14532d'], words: ['Sparse', 'Dense'] },
         'layer-wildfires': { label: 'Active wildfires', type: 'dots', stops: ['#f5b942', '#f2792e', '#e6432c', '#b31f1f', '#6e0f0f'], words: ['Low', 'Extreme (pulsing)'] },
         'layer-sensors': { label: 'Air quality (PM2.5) — column height', type: 'dots', stops: ['#22c55e', '#eab308', '#f97316', '#ef4444', '#a855f7', '#7f1d1d'], words: ['Good', 'Hazardous'] },
@@ -99,7 +172,8 @@ class UIManager {
                 <div class="legend-item">
                     <span class="legend-label">${cfg.label}</span>
                     ${visual}
-                    <div class="legend-values"><span>${cfg.words[0]}</span><span>${cfg.words[1]}</span></div>
+                    <div class="legend-values">${cfg.words.map(w => `<span>${w}</span>`).join('')}</div>
+                    ${cfg.subLabel ? `<div class="legend-sublabel">${cfg.subLabel}</div>` : ''}
                 </div>
             `;
         }).join('');
@@ -158,6 +232,14 @@ class UIManager {
     }
 
     initEventListeners() {
+        // Atmospheric Sync Engine (js/weather.js) dispatches this every time
+        // it re-syncs rain/snow/cloud visuals to the globe center. The
+        // payload's `status` is "success" (real OpenWeatherMap) or "mock"
+        // (deterministic placeholder used when OPENWEATHERMAP_API_KEY isn't
+        // set) — surface that honestly instead of showing weather-driven
+        // visuals with no indication they might not be real.
+        document.addEventListener('weatherSynced', (e) => this.updateAseStatusBadge(e.detail));
+
         // "LAB" quick-access button jumps to the What-If Simulator tab
         const scenarioBtn = document.getElementById('scenario-btn');
         if (scenarioBtn) {
@@ -284,25 +366,49 @@ class UIManager {
 
         statusEl.classList.add('hidden');
 
-        // Render the country heatmap on the globe
+        // Map heatmap: every country with real data from any source —
+        // full coverage, single-component territories included, since a
+        // colored polygon in the right place isn't misleading the way a
+        // #1 ranking slot would be.
         if (window.globeManager) {
             window.globeManager.renderGlobalShiHeatmap(result.countries);
         }
 
-        // Render the ranking list, with each real component that fed the score
-        rankingEl.innerHTML = result.countries.map((c, i) => {
+        // Ranked list: restricted server-side to countries with >= 2 real
+        // components (see shi_composite.py's MIN_COMPONENTS_FOR_RANKING) —
+        // a single-component score isn't diluted by any other dimension
+        // and can otherwise flood the top of the list with real but
+        // statistically thin values (e.g. several tiny territories all
+        // landing at a perfect 100 on one metric alone).
+        const rankable = result.ranking_countries || [];
+        this._renderShiRankingList(rankable);
+    }
+
+    // Renders the ranking list rows.
+    _renderShiRankingList(countries) {
+        const rankingEl = document.getElementById('global-shi-ranking');
+        const componentIcons = {
+            air_quality: '<i class="fa-solid fa-wind" title="Air quality (OpenAQ)"></i>',
+            emissions: '<i class="fa-solid fa-smog" title="Climate/Emissions (World Bank CO2 per capita)"></i>',
+            health: '<i class="fa-solid fa-heart-pulse" title="Health outcomes (WHO life expectancy)"></i>',
+            vegetation: '<i class="fa-solid fa-seedling" title="Vegetation (NASA MODIS NDVI)"></i>'
+        };
+
+        if (!countries.length) {
+            rankingEl.innerHTML = '<p class="text-secondary small">No countries currently have data from 2 or more real sources.</p>';
+            return;
+        }
+
+        rankingEl.innerHTML = countries.map((c) => {
             const riskClass = c.shi >= 80 ? 'healthy' : (c.shi >= 50 ? 'moderate' : 'poor');
-            const componentIcons = {
-                air_quality: '<i class="fa-solid fa-wind" title="Air quality (OpenAQ)"></i>',
-                climate_stability: '<i class="fa-solid fa-temperature-half" title="Climate stability (Open-Meteo)"></i>',
-                vegetation: '<i class="fa-solid fa-seedling" title="Vegetation (NASA MODIS)"></i>'
-            };
             const usedIcons = (c.components_used || []).map(k => componentIcons[k] || '').join(' ');
+            const count = c.component_count || (c.components_used || []).length;
             return `
                 <div class="shi-rank-row" data-code="${c.country_code}">
-                    <span class="shi-rank-position">#${i + 1}</span>
+                    <span class="shi-rank-position">#${c.ranking_rank ?? ''}</span>
                     <span class="shi-rank-name">${c.country_name}</span>
                     <span class="shi-rank-components">${usedIcons}</span>
+                    <span class="shi-rank-coverage" title="${count} of 4 real data sources">${count}/4</span>
                     <span class="shi-rank-score ${riskClass}">${c.shi}</span>
                 </div>
             `;
@@ -410,6 +516,10 @@ class UIManager {
             document.getElementById('insight-card').classList.remove('active');
         });
 
+        // Global SHI panel's collapse behavior is registered in
+        // initPanelCollapse() below, alongside left-panel/right-panel —
+        // same proven mechanism, not custom logic.
+
         // Timeline playback
         const playBtn = document.getElementById('play-btn');
         let isPlaying = false;
@@ -418,47 +528,35 @@ class UIManager {
         playBtn.addEventListener('click', () => {
             isPlaying = !isPlaying;
             playBtn.innerHTML = isPlaying ? '<i class="fa-solid fa-pause"></i>' : '<i class="fa-solid fa-play"></i>';
-            
+
             const slider = document.getElementById('timeline-slider');
-            
-            if (window.globeManager) {
-                window.globeManager.isTimelapsePlaying = isPlaying;
-            }
 
             if (isPlaying) {
-                // PAUSE auto-rotation during timelapse (so user can focus on environmental changes)
-                if (window.globeManager) {
-                    window.globeManager.isAutoRotating = false;
-                }
-
                 const speedSelect = document.getElementById('speed-select');
-                
+
                 // Start timelapse loop
                 timelapseInterval = setInterval(() => {
                     const speed = speedSelect ? parseInt(speedSelect.value) : 1;
                     let currentValue = parseFloat(slider.value);
-                    
+
                     // Increment by a step based on speed
                     currentValue += (0.5 * speed);
-                    
+
                     // Loop back to start (2000) if we reach the end (present year)
                     if (currentValue >= 100) {
-                        currentValue = 0; 
+                        currentValue = 0;
                     }
-                    
+
                     slider.value = currentValue;
-                    
-                    // Trigger the input event so globe.js knows the slider moved
+
+                    // Trigger the input event so initTimelineEvents' listener
+                    // picks it up and updates the snapshot viewer
                     slider.dispatchEvent(new Event('input'));
-                }, 1000); // Trigger every 1 second to allow tiles to load
+                }, 1000); // Trigger every 1 second to give the snapshot image time to load
             } else {
                 // Stop timelapse
                 clearInterval(timelapseInterval);
             }
-        });
-
-        document.getElementById('timeline-slider').addEventListener('input', (e) => {
-            this.updateDateDisplay(e.target.value, 'primary');
         });
 
         // Minimal Mode Toggle
@@ -483,16 +581,11 @@ class UIManager {
             });
         }
 
-        // --- CITIZEN SCIENCE REPORTING ---
-        const reportModal = document.getElementById('report-modal');
+        // --- CITIZEN SCIENCE REPORTING (now sidebar sub-tabs, no modal) ---
         const reportForm = document.getElementById('report-form');
         const severitySlider = document.getElementById('report-severity');
 
-        if (reportModal) {
-            document.getElementById('close-report-modal').addEventListener('click', () => {
-                reportModal.classList.add('hidden');
-            });
-        }
+        this.initReportsSubtabs();
 
         if (severitySlider) {
             severitySlider.addEventListener('input', (e) => {
@@ -510,7 +603,7 @@ class UIManager {
 
                 const coordsText = document.getElementById('report-coords').innerText;
                 const [lat, lon] = coordsText.split(',').map(c => parseFloat(c));
-                const selectedType = reportForm.querySelector('input[name="incident-type"]:checked')?.value || 'pollution';
+                const selectedType = reportForm.querySelector('input[name="incident-type"]:checked')?.value || 'Other';
 
                 const reportData = {
                     lat: lat,
@@ -524,12 +617,12 @@ class UIManager {
 
                 const result = await api.submitReport(reportData);
                 if (result) {
-                    reportModal.classList.add('hidden');
                     reportForm.reset();
                     document.getElementById('severity-val').innerText = '3';
                     document.dispatchEvent(new CustomEvent('reportSubmitted', { detail: result }));
                     this.refreshReportsFeed();
                     this.showNeuralScan("Ground-Truth Data Synchronized Successfully");
+                    this.switchReportsSubtab('info'); // back to the feed to see the new report
                 } else {
                     alert("Sync failed. Check connection.");
                 }
@@ -537,12 +630,6 @@ class UIManager {
                 btn.disabled = false;
             });
         }
-
-        document.addEventListener('openReportModal', (e) => {
-            const { lat, lon } = e.detail;
-            document.getElementById('report-coords').innerText = `${lat.toFixed(4)}, ${lon.toFixed(4)}`;
-            reportModal.classList.remove('hidden');
-        });
 
         // Any layer can report a degraded/no-data state (e.g. missing API
         // key) via this event instead of silently doing nothing.
@@ -570,6 +657,19 @@ class UIManager {
         tabs.forEach(tab => {
             tab.addEventListener('click', () => {
                 const targetTab = tab.getAttribute('data-tab');
+
+                // On/off toggle for Global Health Index: clicking its
+                // already-active nav icon closes the panel exactly the
+                // way the panel's own X button does — hide only, no
+                // switchTab('earth'), so the globe doesn't start
+                // auto-rotating just because this panel closed. Clicking
+                // the icon again re-opens it via the normal flow below.
+                if (targetTab === 'global-shi' && tab.classList.contains('active')) {
+                    document.getElementById('global-shi-panel')?.classList.add('hidden');
+                    tab.classList.remove('active');
+                    return;
+                }
+
                 // Deactivate all first
                 tabs.forEach(t => t.classList.remove('active'));
                 tab.classList.add('active');
@@ -598,30 +698,19 @@ class UIManager {
         // internally, so nothing else should write that attribute directly.
         AppState.setActiveTab(tabName);
 
-        // 0. Reset: turn OFF every active environmental layer on the globe.
-        // Layers are a per-tab investigation tool, not a persistent state —
-        // leaving a tab should close whatever it was showing on the globe,
-        // the same way you'd expect a real instrument panel to power down.
-        // Dispatching a real 'change' event (not just flipping .checked)
-        // re-uses each layer's existing toggle handler in globe.js/ui.js,
-        // so this stays in sync automatically if a new layer is added later.
+        // 0. Reset: tear down every tab-specific visual overlay, every
+        // single time, regardless of which tab is being entered — then
+        // the switch-case below turns back on exactly what the target
+        // tab needs. This is deliberately unconditional rather than "if
+        // leaving tab X, clean up X's stuff": that pattern is exactly how
+        // the Global SHI heatmap (and, earlier, report pins) ended up
+        // with no teardown at all and kept showing long after navigating
+        // away. Any new tab-specific globe layer or transient UI state
+        // should be added to TAB_SCOPED_TEARDOWN below, not as a one-off
+        // conditional here — that's the single enforcement point for
+        // "nothing leaks between tabs," with no exceptions at this point.
         this.resetActiveLayers();
-
-        // Satellite imagery is no longer a general Insight-tab toggle (its
-        // imagery-tile reliability made it a poor fit as a user-facing
-        // switch) — it's exclusively Tab 3's own built-in historical view
-        // now. Driven directly here rather than through a checkbox, since
-        // there isn't one anymore: on when entering Tab 3, off everywhere
-        // else, every time.
-        if (window.globeManager) {
-            const isTemporalTab = (tabName === 'temporal' || tabName === 'timeline');
-            window.globeManager.toggleSatelliteView(isTemporalTab);
-
-            if (!isTemporalTab) {
-                document.getElementById('story-readout')?.classList.add('hidden');
-                document.querySelectorAll('.preset-chip').forEach(c => c.classList.remove('active'));
-            }
-        }
+        Object.values(UIManager.TAB_SCOPED_TEARDOWN).forEach(teardown => teardown());
 
         // Tab-Specific Visibility Mapping (Refined HUD)
         // Note: the floating search bar (.floating-controller) is
@@ -632,6 +721,7 @@ class UIManager {
             'right': document.querySelector('.right-panel'),
             'bottom': document.querySelector('.bottom-panel'),
             'presets': document.getElementById('timelapse-presets'),
+            'snapshotViewer': document.getElementById('snapshot-viewer'),
             'insight': document.getElementById('insight-card'),
             'reports': document.getElementById('reports-panel'),
             'globalShi': document.getElementById('global-shi-panel'),
@@ -668,19 +758,19 @@ class UIManager {
             case 'timeline':
                 if(uiElements.bottom) uiElements.bottom.classList.remove('hidden');
                 if(uiElements.presets) uiElements.presets.classList.remove('hidden');
+                if(uiElements.snapshotViewer) uiElements.snapshotViewer.classList.remove('hidden');
 
-                // Satellite is turned on above (unconditionally, for every
-                // entry into this tab); NDVI is already off from
-                // resetActiveLayers() at the top of this function — neither
-                // needs handling here anymore.
-                if (window.globeManager) {
-                    // Render the timeline's current position immediately —
-                    // previously nothing rendered until the user happened to
-                    // drag the slider, which combined with the satellite bug
-                    // made this tab look completely empty on first entry.
+                // Show the flat-image snapshot at whatever location is
+                // currently selected (or the default) and the timeline
+                // slider's current position — mirrors the old "render
+                // immediately on tab entry" fix, but through the snapshot
+                // viewer instead of a Cesium imagery layer.
+                if (window.snapshotViewer) {
+                    const loc = AppState.selectedLocation ?? CONFIG.DEFAULT_COORDINATES;
                     const primarySlider = document.getElementById('timeline-slider');
+                    window.snapshotViewer.show(loc.lat, loc.lon);
                     if (primarySlider) {
-                        window.globeManager.updateTime(primarySlider.value, 'primary');
+                        window.snapshotViewer.updateDate(primarySlider.value, 'primary');
                     }
                 }
                 break;
@@ -697,6 +787,7 @@ class UIManager {
 
             case 'reports':
                 if(uiElements.reports) uiElements.reports.classList.remove('hidden');
+                window.globeManager?.setReportsVisible(true);
                 break;
 
             case 'global-shi':
@@ -725,9 +816,9 @@ class UIManager {
     }
 
     updateDateDisplay(value, type = 'primary') {
-        if (!window.globeManager) return;
-        const startYear = window.globeManager.TIMELINE_START_YEAR;
-        const totalYears = window.globeManager.TIMELINE_END_YEAR - startYear;
+        if (!window.snapshotViewer) return;
+        const startYear = window.snapshotViewer.TIMELINE_START_YEAR;
+        const totalYears = window.snapshotViewer.TIMELINE_END_YEAR - startYear;
         const year = startYear + Math.floor((value / 100) * totalYears);
         const monthIndex = Math.floor(((value / 100) * (totalYears * 12)) % 12);
         const monthNames = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
@@ -749,22 +840,22 @@ class UIManager {
         const comparisonNode = document.getElementById('comparison-slider-node');
 
         primarySlider.addEventListener('input', (e) => {
-            if (window.globeManager) window.globeManager.updateTime(e.target.value, 'primary');
+            this.updateDateDisplay(e.target.value, 'primary');
+            window.snapshotViewer?.updateDate(e.target.value, 'primary');
             this.updateTimelineNdviReadout();
         });
 
         comparisonSlider.addEventListener('input', (e) => {
-            if (window.globeManager) window.globeManager.updateTime(e.target.value, 'historical');
+            this.updateDateDisplay(e.target.value, 'historical');
+            window.snapshotViewer?.updateDate(e.target.value, 'historical');
         });
 
         splitBtn.addEventListener('click', () => {
             const isEnabled = comparisonNode.classList.toggle('hidden');
             const splitActive = !isEnabled; // If hidden is toggled off, split is active
-            
+
             splitBtn.classList.toggle('active', splitActive);
-            if (window.globeManager) {
-                window.globeManager.toggleSplitScreen(splitActive);
-            }
+            window.snapshotViewer?.setSplitMode(splitActive);
         });
 
         // Curated location presets — guaranteed-good starting points for
@@ -787,35 +878,44 @@ class UIManager {
                 document.querySelectorAll('.preset-chip').forEach(c => c.classList.remove('active'));
                 chip.classList.add('active');
 
-                if (window.globeManager) {
+                AppState.setSelectedLocation(lat, lon);
+
+                // Fly the globe camera to the location for visual context
+                // behind/around the snapshot panel. This is plain camera
+                // movement, not an imagery-layer swap — it was never the
+                // thing causing the instability, so it's safe to keep.
+                if (window.globeManager?.viewer) {
                     window.globeManager._programmaticFlight = true;
                     window.globeManager.viewer.camera.flyTo({
                         destination: Cesium.Cartesian3.fromDegrees(lon, lat, height),
                         duration: 2.0,
                         complete: () => { window.globeManager._programmaticFlight = false; }
                     });
-                    AppState.setSelectedLocation(lat, lon);
+                }
 
-                    const beforeDate = chip.dataset.beforeDate;
-                    const afterDate = chip.dataset.afterDate;
-                    if (beforeDate && afterDate) {
-                        const beforeValue = this.dateToSliderValue(beforeDate);
-                        const afterValue = this.dateToSliderValue(afterDate);
+                window.snapshotViewer?.show(lat, lon);
 
-                        primarySlider.value = afterValue;
-                        window.globeManager.updateTime(afterValue, 'primary');
+                const beforeDate = chip.dataset.beforeDate;
+                const afterDate = chip.dataset.afterDate;
+                if (beforeDate && afterDate) {
+                    const beforeValue = this.dateToSliderValue(beforeDate);
+                    const afterValue = this.dateToSliderValue(afterDate);
 
-                        comparisonSlider.value = beforeValue;
-                        window.globeManager.updateTime(beforeValue, 'historical');
+                    primarySlider.value = afterValue;
+                    this.updateDateDisplay(afterValue, 'primary');
+                    window.snapshotViewer?.updateDate(afterValue, 'primary');
 
-                        if (comparisonNode.classList.contains('hidden')) {
-                            comparisonNode.classList.remove('hidden');
-                            splitBtn.classList.add('active');
-                            window.globeManager.toggleSplitScreen(true);
-                        }
+                    comparisonSlider.value = beforeValue;
+                    this.updateDateDisplay(beforeValue, 'historical');
+                    window.snapshotViewer?.updateDate(beforeValue, 'historical');
 
-                        this.showStoryReadout(chip, beforeDate, afterDate, lat, lon);
+                    if (comparisonNode.classList.contains('hidden')) {
+                        comparisonNode.classList.remove('hidden');
+                        splitBtn.classList.add('active');
+                        window.snapshotViewer?.setSplitMode(true);
                     }
+
+                    this.showStoryReadout(chip, beforeDate, afterDate, lat, lon);
                 }
                 this.showNeuralScan(name);
             });
@@ -828,14 +928,14 @@ class UIManager {
     }
 
     // Converts a "YYYY-MM-01" date string into the 0-100 slider value that
-    // produces it via GlobeManager.updateTime()'s inverse formula — keeps
+    // produces it via SnapshotViewer.updateDate()'s inverse formula — keeps
     // the date<->slider-position mapping in one place rather than
     // duplicating the month-math here.
     dateToSliderValue(dateStr) {
-        if (!window.globeManager) return 0;
+        if (!window.snapshotViewer) return 0;
         const [y, m] = dateStr.split('-').map(Number);
-        const startYear = window.globeManager.TIMELINE_START_YEAR;
-        const totalMonths = (window.globeManager.TIMELINE_END_YEAR - startYear) * 12;
+        const startYear = window.snapshotViewer.TIMELINE_START_YEAR;
+        const totalMonths = (window.snapshotViewer.TIMELINE_END_YEAR - startYear) * 12;
         const monthTotal = (y - startYear) * 12 + (m - 1);
         return Math.max(0, Math.min(100, (monthTotal / totalMonths) * 100));
     }
@@ -884,10 +984,10 @@ class UIManager {
     // view, at the slider's current date, so the timelapse is backed by
     // an actual number alongside the imagery — not just a visual.
     async updateTimelineNdviReadout() {
-        if (!window.globeManager) return;
+        if (!window.snapshotViewer) return;
         const lat = AppState.selectedLocation?.lat ?? CONFIG.DEFAULT_COORDINATES.lat;
         const lon = AppState.selectedLocation?.lon ?? CONFIG.DEFAULT_COORDINATES.lon;
-        const date = window.globeManager.currentDate;
+        const date = window.snapshotViewer.primaryDate;
 
         const ndviData = await api.getNdviValue(lat, lon, date);
         const readout = document.getElementById('timeline-ndvi-value');
@@ -1058,6 +1158,24 @@ class UIManager {
         badge.title = info.title;
     }
 
+    // Shows/updates the small "LIVE"/"MOCK" pill in the corner of the
+    // globe reflecting whether the current rain/snow/cloud atmospheric
+    // sync came from real OpenWeatherMap data or the labeled deterministic
+    // fallback (see backend/services/weather.py's `status` field). Called
+    // from the 'weatherSynced' listener in initEventListeners().
+    updateAseStatusBadge(weather) {
+        const badge = document.getElementById('ase-status-badge');
+        if (!badge || !weather || !weather.status) return;
+
+        const isLive = weather.status === 'success';
+        badge.classList.remove('hidden');
+        badge.className = `ase-status-badge ${isLive ? 'live' : 'mock'}`;
+        badge.textContent = isLive ? 'ASE: LIVE' : 'ASE: MOCK';
+        badge.title = isLive
+            ? 'Rain/snow/cloud visuals are synced to live OpenWeatherMap data at this location.'
+            : 'OPENWEATHERMAP_API_KEY is not set, so rain/snow/cloud visuals use a deterministic placeholder, not real weather.';
+    }
+
     // AQI color scale shared with the sensor dots on the globe and the
     // browser extension's AQI_ALERT_THRESHOLD (200) — kept in one place
     // here so the forecast bars, if that scale ever changes, are easy to
@@ -1200,9 +1318,10 @@ class UIManager {
 
         // Update Summary
         const location = climateData.location;
+        const _anomalySign = climateData.current_anomaly > 0 ? '+' : '';
         let summaryHtml = `
             <p><i class="fa-solid fa-location-dot"></i> Lat: ${location.lat.toFixed(2)}°, Lon: ${location.lon.toFixed(2)}°</p>
-            <p><strong>Anomaly:</strong> <span style="color:${climateData.current_anomaly > 0 ? 'var(--danger)' : 'var(--accent-color)'}">${climateData.current_anomaly}°C</span></p>
+            <p><strong>Anomaly:</strong> <span style="color:${climateData.current_anomaly > 0 ? 'var(--danger)' : 'var(--accent-color)'}">${_anomalySign}${climateData.current_anomaly.toFixed(2)}°C</span></p>
         `;
         
         if (shiData) {
@@ -1295,7 +1414,21 @@ class UIManager {
 
             document.getElementById('node-temp').innerText = `${latest.avg_temp_c}°C`;
             document.getElementById('node-precip').innerText = `${latest.total_rainfall_mm}mm`;
-            document.getElementById('node-anomaly').innerText = `${climateData.current_anomaly}°C`;
+
+            // Anomaly is a delta from a seasonal baseline, not an absolute
+            // temperature — showing it as a bare number ("7.67°C") reads
+            // like a temperature reading, not a departure from normal.
+            // An explicit sign makes clear which direction it's off by.
+            const anomaly = climateData.current_anomaly;
+            const anomalySign = anomaly > 0 ? '+' : (anomaly < 0 ? '' : '±'); // toFixed already includes '-' for negatives
+            document.getElementById('node-anomaly').innerText = `${anomalySign}${anomaly.toFixed(2)}°C`;
+
+            const subEl = document.getElementById('node-anomaly-sub');
+            if (subEl) {
+                subEl.textContent = anomaly > 0.05 ? 'Warmer than historical average'
+                    : anomaly < -0.05 ? 'Colder than historical average'
+                    : 'Near historical average';
+            }
 
             // climateData.data_source is "real_openmeteo" or
             // "estimated_fallback" — applies to temp/rainfall/anomaly,

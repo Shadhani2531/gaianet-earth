@@ -64,8 +64,19 @@ def get_stations(limit: int = 1000) -> List[Dict[str, Any]]:
     Real OpenAQ v3 station list with PM2.5/PM10 sensors, each including
     a real country code (ISO 3166-1 alpha-2). Cached for 6 hours since
     station metadata doesn't change minute-to-minute.
+
+    BUG FIX: OpenAQ v3's /locations endpoint hard-caps `limit` at 1000
+    per page (docs.openaq.org/using-the-api/pagination) and rejects
+    anything higher with a 422 Unprocessable Entity — no partial results,
+    no silent clamping on their end. get_country_aqi_aggregate() was
+    calling this with limit=2000, so every single Tab 6 (Global SHI)
+    request failed at this very first step with a 422, before any of the
+    per-station reading logic even ran. Clamped defensively here (same
+    pattern as _OPENAQ_MAX_RADIUS_M below) so no caller can trigger this
+    again by passing too high a value.
     """
     global _last_openaq_error
+    limit = min(limit, 1000)
     now = datetime.now(timezone.utc)
     if (_locations_cache["data"] is not None and _locations_cache["fetched_at"]
             and (now - _locations_cache["fetched_at"]) < timedelta(hours=CACHE_HOURS)):
@@ -96,9 +107,47 @@ def get_stations(limit: int = 1000) -> List[Dict[str, Any]]:
         return _locations_cache["data"] if _locations_cache["data"] is not None else []
 
 
-def get_station_latest_pm25(location_id: int) -> float | None:
-    """Real latest PM2.5 reading for a single station."""
+def _pm25_sensor_id(station: Dict[str, Any]) -> int | None:
+    """Finds the sensor id (not location id) on a /locations-shaped station
+    object that measures PM2.5 (parameter id 2). A station can have several
+    sensors (PM2.5, PM10, O3, ...); this is what lets get_station_latest_pm25
+    pick out the right one from a /latest response."""
+    for s in station.get("sensors", []):
+        if s.get("parameter", {}).get("id") == 2:
+            return s.get("id")
+    return None
+
+
+def get_station_latest_pm25(location_id: int, pm25_sensor_id: int | None = None) -> float | None:
+    """
+    Real latest PM2.5 reading for a single station.
+
+    BUG FIX: OpenAQ v3's /locations/{id}/latest response does NOT embed a
+    "parameter" object per result (confirmed against OpenAQ's own docs,
+    docs.openaq.org/resources/latest) — each result only carries a
+    "sensorsId" foreign key, "value", "datetime", and "coordinates". The
+    previous version of this function matched on
+    `r.get("parameter", {}).get("id") == 2`, which is always False since
+    that key never exists on a /latest result — meaning this silently
+    returned None for every single station, every single call, since it
+    was written. That's why Tab 6 (Global SHI) showed "Could not fetch
+    real OpenAQ data" with no specific reason attached (the /locations
+    list call itself succeeded fine; only the per-station reading lookup
+    was broken), and why /stations-with-readings and /alerts/summary were
+    quietly returning no real readings too.
+
+    The correct match is against `sensorsId`, which requires knowing that
+    station's PM2.5 sensor's id ahead of time — get it from the station's
+    own /locations sensors[] entry via _pm25_sensor_id() before calling
+    this, since a station can have several sensors for different
+    pollutants and /latest doesn't say which is which on its own.
+    """
     if not _has_api_key():
+        return None
+    if pm25_sensor_id is None:
+        # No known PM2.5 sensor id for this station — can't reliably tell
+        # which of possibly several pollutant readings is PM2.5, so don't
+        # guess at one.
         return None
     try:
         resp = requests.get(
@@ -109,7 +158,7 @@ def get_station_latest_pm25(location_id: int) -> float | None:
         resp.raise_for_status()
         results = resp.json().get("results", [])
         for r in results:
-            if r.get("parameter", {}).get("id") == 2:  # PM2.5
+            if r.get("sensorsId") == pm25_sensor_id:
                 return r.get("value")
         return None
     except Exception as e:
@@ -192,7 +241,7 @@ def get_stations_near(lat: float, lon: float, radius_km: float, limit: int = 25)
     enriched = []
     with ThreadPoolExecutor(max_workers=min(10, len(stations))) as executor:
         future_to_station = {
-            executor.submit(get_station_latest_pm25, s["id"]): s for s in stations
+            executor.submit(get_station_latest_pm25, s["id"], _pm25_sensor_id(s)): s for s in stations
         }
         for future in as_completed(future_to_station):
             station = future_to_station[future]
@@ -257,7 +306,7 @@ def get_stations_with_readings(limit: int = MAX_STATIONS_WITH_READINGS) -> List[
     enriched = []
     with ThreadPoolExecutor(max_workers=10) as executor:
         future_to_station = {
-            executor.submit(get_station_latest_pm25, station["id"]): station
+            executor.submit(get_station_latest_pm25, station["id"], _pm25_sensor_id(station)): station
             for station in has_pm25
         }
         for future in as_completed(future_to_station):
@@ -306,7 +355,7 @@ def get_country_aqi_aggregate(max_stations_to_query: int = 200) -> Dict[str, Dic
             and (now - _country_agg_cache["fetched_at"]) < timedelta(hours=CACHE_HOURS)):
         return _country_agg_cache["data"]
 
-    stations = get_stations(limit=2000)
+    stations = get_stations(limit=1000)  # 1000 is OpenAQ's real hard cap, not a chosen sample size
     if not stations:
         return {}
 
@@ -350,7 +399,7 @@ def get_country_aqi_aggregate(max_stations_to_query: int = 200) -> Dict[str, Dic
     by_country_values = defaultdict(list)
     with ThreadPoolExecutor(max_workers=10) as executor:
         future_to_pair = {
-            executor.submit(get_station_latest_pm25, station["id"]): (station, code)
+            executor.submit(get_station_latest_pm25, station["id"], _pm25_sensor_id(station)): (station, code)
             for station, code in sampled
         }
         for future in as_completed(future_to_pair):
@@ -400,6 +449,22 @@ def get_country_boundaries_geojson() -> Dict[str, Any]:
         resp = requests.get(_COUNTRY_BOUNDARIES_URL, timeout=30)
         resp.raise_for_status()
         data = resp.json()
+
+        original_count = len(data.get("features", []))
+        data["features"] = [
+            f for f in data.get("features", [])
+            if (f.get("properties") or {}).get("ISO3166-1-Alpha-2") != "AQ"
+        ]
+        removed = original_count - len(data["features"])
+        if removed:
+            logger.info(
+                f"Filtered {removed} Antarctica feature(s) from country boundaries — "
+                f"its polygon touches latitude -90.0, which crashes Cesium's polygon "
+                f"renderer (subdivideRhumbLine RangeError, a confirmed Cesium engine "
+                f"bug, not specific to this data). Antarctica has no country_coords.py "
+                f"entry and is never scored by the SHI composite, so nothing real is lost."
+            )
+
         _boundaries_cache["data"] = data
         _boundaries_cache["fetched_at"] = now
         return data
