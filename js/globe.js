@@ -47,10 +47,10 @@ class GlobeManager {
             co2: null,
             pollution: null,
             weather: null,
-            ndvi: null,
+            vegetationImagery: null,
             wind: null,
             wildfires: [],
-            sensors: [],
+            sensors: null,
             reports: []
         };
 
@@ -449,7 +449,7 @@ class GlobeManager {
         });
         document.getElementById('layer-ndvi').addEventListener('change', (e) => {
             AppState.setLayerActive('layer-ndvi', e.target.checked);
-            this.toggleEnvironmentalLayer(e.target.checked, 'ndvi');
+            this.toggleVegetationRaster(e.target.checked);
         });
         document.getElementById('layer-rainfall').addEventListener('change', (e) => {
             AppState.setLayerActive('layer-rainfall', e.target.checked);
@@ -511,13 +511,17 @@ class GlobeManager {
         
         // Points are gone from most layers now (billboards/rectangles/
         // cylinders instead — see toggleWildfires/toggleEnvironmentalLayer/
-        // toggleSensors), so this checks all three shapes rather than
-        // only entity.point, which would otherwise fall back to the
-        // default color for almost everything.
-        let popupColor = '#38bdf8';
-        if (entity.point) popupColor = entity.point.color.getValue().toCssColorString();
-        else if (entity.rectangle) popupColor = entity.rectangle.material.getValue().color.toCssColorString();
-        else if (entity.cylinder) popupColor = entity.cylinder.material.getValue().color.toCssColorString();
+        // toggleSensors). Billboard-based entities (wildfires, sensors)
+        // don't have a queryable Cesium color property the way point/
+        // rectangle/cylinder do — their color lives baked into the glyph
+        // canvas image — so those store their real color directly in
+        // _customData.colorHex at creation time, checked first here.
+        let popupColor = data.colorHex || '#38bdf8';
+        if (!data.colorHex) {
+            if (entity.point) popupColor = entity.point.color.getValue().toCssColorString();
+            else if (entity.rectangle) popupColor = entity.rectangle.material.getValue().color.toCssColorString();
+            else if (entity.cylinder) popupColor = entity.cylinder.material.getValue().color.toCssColorString();
+        }
 
         ui.showSensorPopup(entity.id, {
             name: `${data.type.charAt(0).toUpperCase() + data.type.slice(1)} Insight`,
@@ -544,29 +548,12 @@ class GlobeManager {
             }
         });
 
-        // AQI extruded columns live in this.layers.sensors, a plain
-        // entity array rather than a DataSource (see toggleSensors), and
-        // CylinderGraphics has no built-in scaleByDistance the way
-        // points/billboards do — so height/radius are scaled manually
-        // here from each column's stored base dimensions. Without this,
-        // the "3D bar chart" columns would stay full height even zoomed
-        // out to a whole-continent view, burying the globe under a
-        // forest of skyscrapers instead of reading as a subtle severity
-        // cue the way they're meant to at that distance.
-        const columnScale = height > 6000000 ? 0.32 : height > 1500000 ? 0.6 : 1.0;
-        this.layers.sensors.forEach((e) => {
-            const data = e._customData;
-            if (!data || !data.baseHeightM) return;
-            const h = data.baseHeightM * columnScale;
-            if (e.cylinder) {
-                e.cylinder.length = h;
-                e.cylinder.topRadius = data.baseRadiusM * columnScale;
-                e.cylinder.bottomRadius = data.baseRadiusM * columnScale;
-                e.position = Cesium.Cartesian3.fromDegrees(data.lon, data.lat, h / 2);
-            } else if (e.billboard) {
-                e.position = Cesium.Cartesian3.fromDegrees(data.lon, data.lat, h);
-            }
-        });
+        // Sensors used to need bespoke manual column-height scaling here
+        // (CylinderGraphics has no built-in scaleByDistance the way
+        // points/billboards do) — removed along with the 3D column
+        // rendering itself. Sensors is now a real billboard DataSource,
+        // same as wildfires/wind, so the generic loop above already
+        // handles its distance scaling automatically.
     }
 
     async loadLocationAnalytics(lat, lon) {
@@ -696,6 +683,7 @@ class GlobeManager {
                     type: 'wildfire',
                     frp: frp,
                     tier,
+                    colorHex,
                     acq_date: entity.properties.acq_date ? entity.properties.acq_date.getValue() : 'N/A',
                     confidence: entity.properties.confidence ? entity.properties.confidence.getValue() : 0,
                     lat: Cesium.Math.toDegrees(Cesium.Cartographic.fromCartesian(entity.position.getValue()).latitude),
@@ -876,13 +864,17 @@ class GlobeManager {
         // NDVI/rainfall/weather don't have that same problem (their
         // values vary genuinely by both lat and lon, not just lat), so
         // they're unchanged here.
+        // NDVI used to render here too, alongside rainfall/weather —
+        // moved to its own dedicated toggleVegetationRaster() so it can
+        // honestly represent real MODIS pixels without any spatial
+        // interpolation between them (real MODIS coverage has real
+        // gaps — ocean, persistent cloud — that should read as
+        // transparent, not blended with a neighboring real cell).
         const fetchers = {
-            ndvi: () => api.getVegetation(),
             rainfall: () => api.getRainfall(),
             weather: () => api.getWeatherConditions(),
         };
         const labels = {
-            ndvi: 'vegetation',
             rainfall: 'rainfall', weather: 'weather conditions',
         };
         const data = await fetchers[type]();
@@ -907,16 +899,14 @@ class GlobeManager {
             const entities = dataSource.entities.values;
 
             // Half-width of each grid cell, in degrees — matches the
-            // backend's sampling step per layer (modis_ndvi.py's
-            // vegetation grid steps every 10°; climate.py's shared grid
-            // conditions fetch — used by temperature/rainfall/weather —
-            // steps every 20°). Rendering a filled cell at this size
-            // instead of a small dot is what actually fixes the
-            // "continuous field shown as scattered dots" problem: these
-            // are gridded field samples, not discrete point events, so
-            // they should read as a continuous shaded surface, not a
-            // sparse scatter plot.
-            const halfStepDeg = type === 'ndvi' ? 5 : 10;
+            // backend's sampling step (climate.py's shared grid
+            // conditions fetch, used by rainfall/weather, steps every
+            // 20°). Rendering a filled cell at this size instead of a
+            // small dot is what actually fixes the "continuous field
+            // shown as scattered dots" problem: these are gridded field
+            // samples, not discrete point events, so they should read as
+            // a continuous shaded surface, not a sparse scatter plot.
+            const halfStepDeg = 10;
 
             for (let i = 0; i < entities.length; i++) {
                 const entity = entities[i];
@@ -924,12 +914,7 @@ class GlobeManager {
                 const pointSource = entity.properties.data_source ? entity.properties.data_source.getValue() : null;
 
                 let colorHex;
-                if (type === 'ndvi') {
-                    // Sparse (brown) -> mid (yellow-green) -> dense (dark green)
-                    if (val < 0.2) colorHex = '#a16207';
-                    else if (val < 0.5) colorHex = '#84cc16';
-                    else colorHex = '#14532d';
-                } else if (type === 'rainfall') {
+                if (type === 'rainfall') {
                     // Dry -> light rain -> heavy rain (mm in the last hour)
                     if (val <= 0) colorHex = '#78716c'; // Dry
                     else if (val < 2.5) colorHex = '#7dd3fc'; // Light
@@ -1121,26 +1106,62 @@ class GlobeManager {
                     continue;
                 }
 
+                // Sparse-point data (126 real samples, ~20° grid spacing,
+                // confirmed by inspecting backend/services/climate.py's
+                // _build_grid_points directly) does not support a
+                // full-globe continuous fill — a pixel far from every
+                // real sample has no real information behind it, and
+                // coloring it anyway (the previous version had no
+                // distance cutoff at all) is exactly the "default value
+                // filling unsampled pixels" this is required not to do.
+                // Only real points within MAX_INFLUENCE_DEG of this pixel
+                // are even considered; farther points don't get
+                // down-weighted, they're excluded from the average
+                // entirely. Roughly grid-spacing + 10% so neighboring
+                // real cells' influence zones overlap enough to blend
+                // into each other smoothly, without reaching into
+                // unrelated distant regions.
+                const MAX_INFLUENCE_DEG = 22;
+
                 let weightedSum = 0;
                 let weightTotal = 0;
                 let exact = null;
+                let nearestDist = Infinity;
                 for (const p of points) {
                     const dLat = lat - p.lat;
                     let dLon = Math.abs(lon - p.lon);
                     if (dLon > 180) dLon = 360 - dLon; // shortest path across the antimeridian, e.g. 170 vs -170 is really 20 apart, not 340
-                    const distSq = dLat * dLat + dLon * dLon;
-                    if (distSq < 1e-6) { exact = p.value; break; } // essentially on a real sample point
-                    const w = 1 / Math.pow(distSq, POWER / 2);
+                    const dist = Math.sqrt(dLat * dLat + dLon * dLon);
+                    if (dist > MAX_INFLUENCE_DEG) continue; // outside the real data's local reach — ignored, not down-weighted
+                    if (dist < nearestDist) nearestDist = dist;
+                    if (dist < 1e-3) { exact = p.value; break; } // essentially on a real sample point
+                    const w = 1 / Math.pow(dist * dist, POWER / 2);
                     weightedSum += w * p.value;
                     weightTotal += w;
                 }
-                const interpolated = (exact !== null ? exact : (weightTotal > 0 ? weightedSum / weightTotal : 0)) + offset;
 
+                if (nearestDist === Infinity) {
+                    // No real sample anywhere within reach of this pixel
+                    // — transparent, not a fallback color of any kind.
+                    imageData.data[idx] = 0;
+                    imageData.data[idx + 1] = 0;
+                    imageData.data[idx + 2] = 0;
+                    imageData.data[idx + 3] = 0;
+                    continue;
+                }
+
+                const interpolated = (exact !== null ? exact : weightedSum / weightTotal) + offset;
                 const [r, g, b, a] = this._anomalyToColor(interpolated);
+
+                // Soft fade from full alpha (right at a real point) to
+                // zero (at the edge of its influence radius) — a hard
+                // cutoff here would just trade the old sharp color-blob
+                // edge for an equally artificial sharp transparent edge.
+                const coverageFade = Math.max(0, Math.min(1, 1 - nearestDist / MAX_INFLUENCE_DEG));
                 imageData.data[idx] = r;
                 imageData.data[idx + 1] = g;
                 imageData.data[idx + 2] = b;
-                imageData.data[idx + 3] = a;
+                imageData.data[idx + 3] = Math.round(a * coverageFade);
             }
         }
         ctx.putImageData(imageData, 0, 0);
@@ -1162,6 +1183,159 @@ class GlobeManager {
             this.layers.temperatureAnomalyImagery = layer;
         } catch (e) {
             console.error('Failed to build temperature anomaly raster layer:', e);
+        }
+    }
+
+    // Diverging-by-density color scale for NDVI: <0 is handled by the
+    // caller (transparent, never reaches here) — this only maps the real
+    // 0..1 vegetation range: brown (bare) -> yellow-green (low) -> green
+    // (moderate) -> dark green (dense), per the exact NDVI scale
+    // specified. Smooth color blending WITHIN this value-based scale is
+    // not the same thing as spatial interpolation between measurement
+    // locations (which this layer never does) — every pixel in a real
+    // cell gets the exact same value and therefore the exact same color.
+    _ndviToColor(value) {
+        const stops = [
+            { v: 0.0, rgb: [161, 98, 7] },    // brown/tan — sparse/bare
+            { v: 0.2, rgb: [190, 190, 40] },  // yellow — low vegetation
+            { v: 0.4, rgb: [132, 204, 22] },  // light green — low-moderate
+            { v: 0.6, rgb: [34, 139, 34] },   // green — moderate
+            { v: 1.0, rgb: [10, 65, 20] },    // dark green — dense
+        ];
+        const clamped = Math.max(0, Math.min(1, value));
+        let lo = stops[0], hi = stops[stops.length - 1];
+        for (let i = 0; i < stops.length - 1; i++) {
+            if (clamped >= stops[i].v && clamped <= stops[i + 1].v) { lo = stops[i]; hi = stops[i + 1]; break; }
+        }
+        const span = hi.v - lo.v;
+        const t = span === 0 ? 0 : (clamped - lo.v) / span;
+        return lo.rgb.map((c, i) => Math.round(c + (hi.rgb[i] - c) * t));
+    }
+
+    // Real per-location classification, used both for the raster color
+    // (indirectly, via _ndviToColor) and for the Insight panel's text
+    // label — kept as one shared source of truth so the map and the
+    // panel never disagree about what "Moderate" means.
+    _ndviClassification(value) {
+        if (value < 0) return 'Water/Snow/Non-vegetated';
+        if (value < 0.2) return 'Sparse';
+        if (value < 0.4) return 'Low';
+        if (value < 0.6) return 'Moderate';
+        return 'Dense';
+    }
+
+    async toggleVegetationRaster(visible, factor = 1.0) {
+        if (!visible) {
+            if (this.layers.vegetationImagery) {
+                this.viewer.imageryLayers.remove(this.layers.vegetationImagery);
+                this.layers.vegetationImagery = null;
+            }
+            return;
+        }
+
+        const data = await api.getVegetation();
+        if (!data || !data.features || data.features.length === 0) {
+            const message = api.lastErrorKind === 'network'
+                ? `Could not reach the backend — check that the FastAPI server is running and reachable at ${CONFIG.API_BASE_URL}.`
+                : `The backend is running, but couldn't get real NDVI data from NASA MODIS (via ORNL DAAC) right now — check the backend server's console log for the actual error, or try again in a minute.`;
+            document.dispatchEvent(new CustomEvent('layerNotice', { detail: { message } }));
+            return;
+        }
+
+        // Diagnostic: real vs fallback counts and a sample of actual
+        // values, logged directly rather than guessed at — if real_pct
+        // is low, most of the grid is falling back to the (genuinely
+        // latitude-based) biome estimate model in modis_ndvi.py, which
+        // would explain banding even though the render code itself
+        // filters fallback cells to transparent. If real_pct is high but
+        // banding still shows, the bug is elsewhere and this rules out
+        // the data-coverage theory.
+        const realCount = data.features.filter(f => f.properties.data_source === 'real_modis').length;
+        const fallbackCount = data.features.length - realCount;
+        console.log(`[NDVI diagnostic] ${realCount} real MODIS pixels, ${fallbackCount} fallback (${Math.round(100 * realCount / data.features.length)}% real)`);
+        console.log('[NDVI diagnostic] sample of 10 real points:',
+            data.features.filter(f => f.properties.data_source === 'real_modis').slice(0, 10)
+                .map(f => ({ lat: f.geometry.coordinates[1], lon: f.geometry.coordinates[0], ndvi: f.properties.value })));
+        console.log('[NDVI diagnostic] sample of 10 fallback points:',
+            data.features.filter(f => f.properties.data_source !== 'real_modis').slice(0, 10)
+                .map(f => ({ lat: f.geometry.coordinates[1], lon: f.geometry.coordinates[0], ndvi: f.properties.value })));
+
+        // Real grid is on a known REGULAR step (10°, confirmed against
+        // backend/services/modis_ndvi.py's get_vegetation_geojson), so
+        // "nearest real cell" can be computed directly by rounding to
+        // the grid index — no distance search needed, and critically, no
+        // blending between cells: every pixel inside one real cell gets
+        // that cell's exact real value, nothing else.
+        const STEP = 10;
+        const LAT_START = -60, LON_START = -180;
+        const cellByIndex = {};
+        data.features.forEach(f => {
+            const lon = f.geometry.coordinates[0];
+            const lat = f.geometry.coordinates[1];
+            const latIdx = Math.round((lat - LAT_START) / STEP);
+            const lonIdx = Math.round((lon - LON_START) / STEP);
+            cellByIndex[`${latIdx},${lonIdx}`] = {
+                value: f.properties.value,
+                isReal: f.properties.data_source === 'real_modis',
+            };
+        });
+
+        const west = -180, east = 180, south = -90, north = 90;
+        const width = 360, height = 180;
+        const canvas = document.createElement('canvas');
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext('2d');
+        const imageData = ctx.createImageData(width, height);
+
+        for (let py = 0; py < height; py++) {
+            const lat = north - py - 0.5;
+            for (let px = 0; px < width; px++) {
+                const lon = west + px + 0.5;
+                const idx = (py * width + px) * 4;
+
+                const latIdx = Math.round((lat - LAT_START) / STEP);
+                const lonIdx = Math.round((lon - LON_START) / STEP);
+                const cell = cellByIndex[`${latIdx},${lonIdx}`];
+
+                // Transparent, not colored, when: outside the real
+                // sampled grid range entirely; the cell is a biome
+                // estimate rather than a real MODIS pixel (ocean/cloud/
+                // timeout fallback — see modis_ndvi.py); or the real
+                // value is negative (water/snow/non-vegetated, per the
+                // specified scale). Never a fallback color of any kind.
+                if (!cell || !cell.isReal || cell.value < 0) {
+                    imageData.data[idx] = 0;
+                    imageData.data[idx + 1] = 0;
+                    imageData.data[idx + 2] = 0;
+                    imageData.data[idx + 3] = 0;
+                    continue;
+                }
+
+                const [r, g, b] = this._ndviToColor(cell.value * factor);
+                imageData.data[idx] = r;
+                imageData.data[idx + 1] = g;
+                imageData.data[idx + 2] = b;
+                imageData.data[idx + 3] = Math.round(0.50 * 255); // flat ~0.50 opacity, within the specified 0.45-0.55 range
+            }
+        }
+        ctx.putImageData(imageData, 0, 0);
+
+        if (this.layers.vegetationImagery) {
+            this.viewer.imageryLayers.remove(this.layers.vegetationImagery);
+            this.layers.vegetationImagery = null;
+        }
+
+        try {
+            const provider = await Cesium.SingleTileImageryProvider.fromUrl(
+                canvas.toDataURL('image/png'),
+                { rectangle: Cesium.Rectangle.fromDegrees(west, south, east, north) }
+            );
+            const layer = new Cesium.ImageryLayer(provider);
+            this.viewer.imageryLayers.add(layer);
+            this.layers.vegetationImagery = layer;
+        } catch (e) {
+            console.error('Failed to build vegetation raster layer:', e);
         }
     }
 
@@ -1221,29 +1395,32 @@ class GlobeManager {
                  this.toggleTemperatureAnomalyRaster(true, tempOffset);
              }
 
-             // Intensify NDVI Layer
-             if (this.layers.ndvi) {
-                 this.layers.ndvi.entities.values.forEach(entity => {
-                     if (entity.rectangle) {
-                         const base = entity._customData.value;
-                         const factor = 1.0 + (rainOffset / 100);
-                         const current = base * factor;
-
-                         let colorHex = '#14532d';
-                         if (current < 0.2) colorHex = '#a16207';
-                         else if (current < 0.5) colorHex = '#84cc16';
-
-                         entity.rectangle.material = Cesium.Color.fromCssColorString(colorHex).withAlpha(0.42);
-                     }
-                 });
+             // Intensify NDVI Layer — regenerates the raster with the
+             // simulated multiplicative factor applied to every real
+             // cell's value before coloring (see toggleVegetationRaster's
+             // factor parameter), rather than poking individual rectangle
+             // entities the way this used to work before NDVI moved to a
+             // raster imagery layer. Only re-renders if the layer is
+             // currently on, same "don't spontaneously enable a layer
+             // the user hasn't turned on" rule as temperature.
+             if (this.layers.vegetationImagery) {
+                 const factor = 1.0 + (rainOffset / 100);
+                 this.toggleVegetationRaster(true, factor);
              }
         });
     }
 
     async toggleSensors(visible) {
         if (!visible) {
-            this.layers.sensors.forEach(e => this.viewer.entities.remove(e));
-            this.layers.sensors = [];
+            if (this.layers.sensors) {
+                this.viewer.dataSources.remove(this.layers.sensors);
+                this.layers.sensors = null;
+            }
+            // Drop any pulsing entries this layer registered — same
+            // cleanup wildfires does on toggle-off, otherwise repeated
+            // on/off leaks stale billboard references into the shared
+            // pulse loop.
+            this._pulsingBillboards = this._pulsingBillboards.filter((p) => p.layer !== 'sensors');
             return;
         }
 
@@ -1264,7 +1441,13 @@ class GlobeManager {
             return;
         }
 
-        this.viewer.entities.suspendEvents();
+        // A real DataSource (not a plain viewer.entities array, which is
+        // what this used to be) — needed because .clustering is only
+        // available on DataSources, and native clustering is what
+        // actually solves whole-earth clutter, the same way it already
+        // does for wildfires, rather than the manual per-distance column
+        // height scaling this layer used to need.
+        const dataSource = new Cesium.CustomDataSource('sensors');
 
         stations.forEach((s) => {
             if (!s.coordinates) return;
@@ -1272,61 +1455,40 @@ class GlobeManager {
             const pmValue = s.pm25;
 
             // Standard EPA PM2.5 AQI color spectrum (6 tiers) rather than a
-            // coarse 3-bucket split — this is the actual "full color
-            // gradient/severity scale" the toggle should show.
-            let colorHex;
-            if (pmValue <= 12) colorHex = '#22c55e';        // Good
-            else if (pmValue <= 35.4) colorHex = '#eab308'; // Moderate
-            else if (pmValue <= 55.4) colorHex = '#f97316'; // Unhealthy (sensitive)
-            else if (pmValue <= 150.4) colorHex = '#ef4444'; // Unhealthy
-            else if (pmValue <= 250.4) colorHex = '#a855f7'; // Very Unhealthy
-            else colorHex = '#7f1d1d';                       // Hazardous
-            const color = Cesium.Color.fromCssColorString(colorHex);
+            // coarse 3-bucket split — the actual full color/severity scale.
+            let colorHex, tier;
+            if (pmValue <= 12) { colorHex = '#22c55e'; tier = 'good'; }
+            else if (pmValue <= 35.4) { colorHex = '#eab308'; tier = 'moderate'; }
+            else if (pmValue <= 55.4) { colorHex = '#f97316'; tier = 'unhealthy_sensitive'; }
+            else if (pmValue <= 150.4) { colorHex = '#ef4444'; tier = 'unhealthy'; }
+            else if (pmValue <= 250.4) { colorHex = '#a855f7'; tier = 'very_unhealthy'; }
+            else { colorHex = '#7f1d1d'; tier = 'hazardous'; }
 
-            // Extruded column: severity reads as HEIGHT, not just color —
-            // a real "3D bar chart on the globe" rather than a flat dot.
-            // This reads best zoomed into a city/region (a whole-Earth
-            // view of every station as a skyscraper would just be
-            // clutter) — see applyLOD() for the distance-based scale-down
-            // that keeps this reasonable at high camera altitude.
-            const severityFrac = Math.min(1, pmValue / 250.4);
-            const baseHeightM = 24000 + severityFrac * 210000;
-            const baseRadiusM = 9000;
+            // Single glow-dot billboard glyph, same visual language as
+            // every other point-marker layer (wildfires, reports) —
+            // replaces the old two-entity column+cap pair. Size nudges up
+            // slightly with severity, same "magnitude still reads through
+            // size" principle the wildfire flame glyphs use.
+            const glyphSize = tier === 'hazardous' || tier === 'very_unhealthy' ? 15 : 11;
+            const canvas = this._getGlyphCanvas(`aqi-${colorHex}-${glyphSize}`,
+                () => this._createGlowDotCanvas(colorHex, 4, glyphSize));
 
-            const column = this.viewer.entities.add({
-                position: Cesium.Cartesian3.fromDegrees(s.coordinates.longitude, s.coordinates.latitude, baseHeightM / 2),
-                cylinder: {
-                    length: baseHeightM,
-                    topRadius: baseRadiusM,
-                    bottomRadius: baseRadiusM,
-                    material: color.withAlpha(0.55),
-                    outline: true,
-                    outlineColor: color,
-                    outlineWidth: 1,
-                },
-            });
-
-            // The actual clickable "station" marker sits at the column's
-            // top — same glow-dot glyph language used for wildfires/AQI
-            // elsewhere, so every real point-sensor reads consistently.
-            const glowCanvas = this._getGlyphCanvas(`aqi-${colorHex}`,
-                () => this._createGlowDotCanvas(colorHex, 4, 11));
-            const cap = this.viewer.entities.add({
-                position: Cesium.Cartesian3.fromDegrees(s.coordinates.longitude, s.coordinates.latitude, baseHeightM),
+            const entity = dataSource.entities.add({
+                position: Cesium.Cartesian3.fromDegrees(s.coordinates.longitude, s.coordinates.latitude),
                 billboard: {
-                    image: glowCanvas,
+                    image: canvas,
                     verticalOrigin: Cesium.VerticalOrigin.CENTER,
+                    heightReference: Cesium.HeightReference.CLAMP_TO_GROUND,
                     disableDepthTestDistance: Number.POSITIVE_INFINITY,
                 },
             });
 
-            const customData = {
+            entity._customData = {
                 type: 'air_quality_station',
                 name: s.name || "Station",
                 lat: s.coordinates.latitude,
                 lon: s.coordinates.longitude,
-                baseHeightM,
-                baseRadiusM,
+                colorHex,
                 details: {
                     "Country": s.country || "Unknown",
                     "City": s.city || "Unknown",
@@ -1334,15 +1496,36 @@ class GlobeManager {
                     "Status": "Online"
                 }
             };
-            // Both the column body and its top marker carry the same
-            // data — clicking either one shows the same station info.
-            column._customData = customData;
-            cap._customData = customData;
 
-            this.layers.sensors.push(column, cap);
+            // Only the two worst tiers pulse — same "motion reserved for
+            // things that actually warrant attention" principle as
+            // wildfires, rather than every station breathing at once.
+            if (tier === 'very_unhealthy' || tier === 'hazardous') {
+                this._pulsingBillboards.push({
+                    billboard: entity.billboard,
+                    baseScale: 1,
+                    phase: Math.random() * Math.PI * 2,
+                    layer: 'sensors',
+                });
+            }
         });
 
-        this.viewer.entities.resumeEvents();
+        // Same native clustering setup as wildfires — solves whole-earth
+        // clutter without the manual distance-based column scaling this
+        // layer used to rely on.
+        dataSource.clustering.enabled = true;
+        dataSource.clustering.pixelRange = 40;
+        dataSource.clustering.minimumClusterSize = 2;
+
+        dataSource.clustering.clusterEvent.addEventListener((clusteredEntities, cluster) => {
+            cluster.label.show = true;
+            cluster.label.text = clusteredEntities.length.toString();
+            cluster.billboard.show = true;
+            cluster.billboard.image = this.createClusterCanvas(clusteredEntities.length);
+        });
+
+        this.viewer.dataSources.add(dataSource);
+        this.layers.sensors = dataSource;
         this.viewer.scene.requestRender();
     }
 

@@ -101,9 +101,23 @@ def get_ndvi_at_location(lat: float, lon: float, date_str: str = None) -> Dict[s
             if dt.tzinfo is None:
                 dt = dt.replace(tzinfo=timezone.utc)
         except Exception:
-            dt = datetime.now(timezone.utc)
+            dt = datetime.now(timezone.utc) - timedelta(days=60)
     else:
-        dt = datetime.now(timezone.utc)
+        # BUG FIX: this used to default to datetime.now(timezone.utc) —
+        # literally today. MOD13Q1 is a 16-day COMPOSITE product; ORNL
+        # DAAC hasn't generated/published a composite covering "today"
+        # yet, and confirmed via a real observed error, querying for it
+        # returns a hard 400 Bad Request every single time (not a
+        # rate limit, not a network issue — the request itself is
+        # rejected as invalid). This is the exact same class of
+        # processing-lag problem climate.py already accounts for with
+        # Open-Meteo's archive (5-day lag there) — modis_ndvi.py just
+        # never had the equivalent fix. 60 days is a generous buffer
+        # (roughly 4 full 16-day compositing cycles) chosen to reliably
+        # land on an already-published period even if real processing
+        # latency varies — if requests still 400 at this offset, that's
+        # the next thing to check, not a smaller number.
+        dt = datetime.now(timezone.utc) - timedelta(days=60)
 
     real_ndvi = _fetch_real_modis_ndvi(lat, lon, dt)
 

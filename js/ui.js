@@ -136,9 +136,9 @@ class UIManager {
     // severity scale, so it never gets a legend entry.
     static LAYER_LEGEND_CONFIG = {
         'layer-temp': { label: 'Temperature Anomaly (vs. seasonal baseline)', type: 'gradient', stops: ['#08306b', '#6bafd6', '#e6e6e6', '#fd8d3c', '#a50f15'], words: ['-4°C', '-2°C', '0°C', '+2°C', '+4°C'], subLabel: 'Colder ←—— Average ——→ Warmer' },
-        'layer-ndvi': { label: 'Vegetation (NDVI)', type: 'gradient', stops: ['#a16207', '#84cc16', '#14532d'], words: ['Sparse', 'Dense'] },
+        'layer-ndvi': { label: 'Vegetation (NDVI, NASA MODIS)', type: 'gradient', stops: ['#a16207', '#bebe28', '#84cc16', '#228b22', '#0a4114'], words: ['0.0', '0.2', '0.4', '0.6', '1.0'], subLabel: 'Bare/Sparse ←—— Low —— Moderate ——→ Dense' },
         'layer-wildfires': { label: 'Active wildfires', type: 'dots', stops: ['#f5b942', '#f2792e', '#e6432c', '#b31f1f', '#6e0f0f'], words: ['Low', 'Extreme (pulsing)'] },
-        'layer-sensors': { label: 'Air quality (PM2.5) — column height', type: 'dots', stops: ['#22c55e', '#eab308', '#f97316', '#ef4444', '#a855f7', '#7f1d1d'], words: ['Good', 'Hazardous'] },
+        'layer-sensors': { label: 'Air quality (PM2.5) — station markers', type: 'dots', stops: ['#22c55e', '#eab308', '#f97316', '#ef4444', '#a855f7', '#7f1d1d'], words: ['Good', 'Hazardous'] },
         'layer-rainfall': { label: 'Rainfall (last hour)', type: 'gradient', stops: ['#78716c', '#7dd3fc', '#0ea5e9', '#1e3a8a'], words: ['Dry', 'Heavy'] },
         'layer-weather': { label: 'Cloud cover', type: 'gradient', stops: ['#fde047', '#cbd5e1', '#64748b'], words: ['Clear', 'Overcast'] },
         'layer-wind': { label: 'Wind speed — arrow points downwind', type: 'gradient', stops: ['#7dd3fc', '#38bdf8', '#e8c547', '#e6432c'], words: ['Calm', 'Severe'] },
@@ -1364,6 +1364,12 @@ class UIManager {
             else ndviElem.style.color = 'var(--danger)';
 
             this._setStatBadge('stat-ndvi', ndviData.data_source);
+
+            const ndviSubEl = document.getElementById('stat-ndvi-sub');
+            if (ndviSubEl && ndviData.ndvi !== undefined) {
+                const classification = window.globeManager?._ndviClassification(ndviData.ndvi) ?? '';
+                ndviSubEl.textContent = `${classification} — NASA MODIS`;
+            }
         }
 
         // Update Charts
