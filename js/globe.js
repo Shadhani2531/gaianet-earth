@@ -246,13 +246,21 @@ class GlobeManager {
     }
 
     addReportEntity(data) {
+        // Same hex values as the Reports tab's legend dots and Submit
+        // form icons (index.html) — these used to be bright named Cesium
+        // colors (ORANGERED/PURPLE/LIMEGREEN/etc.) that didn't match
+        // anything else in the app's muted instrument palette. Now drawn
+        // from colors that already exist elsewhere in the UI (--danger,
+        // --warning-amber, --text-muted, the rainfall gradient's two
+        // blues, the NDVI bare-ground brown) so the globe pins, the
+        // legend, and the form all agree.
         const colorMap = {
-            'Fire': Cesium.Color.ORANGERED,
-            'Pollution': Cesium.Color.PURPLE,
-            'Deforestation': Cesium.Color.LIMEGREEN,
-            'Water': Cesium.Color.DODGERBLUE,
-            'Flooding': Cesium.Color.ROYALBLUE,
-            'Other': Cesium.Color.YELLOW
+            'Fire': Cesium.Color.fromCssColorString('#ef4444'),
+            'Pollution': Cesium.Color.fromCssColorString('#ffb800'),
+            'Deforestation': Cesium.Color.fromCssColorString('#a16207'),
+            'Water': Cesium.Color.fromCssColorString('#38bdf8'),
+            'Flooding': Cesium.Color.fromCssColorString('#0ea5e9'),
+            'Other': Cesium.Color.fromCssColorString('#64748b')
         };
 
         const color = colorMap[data.incident_type] || Cesium.Color.WHITE;

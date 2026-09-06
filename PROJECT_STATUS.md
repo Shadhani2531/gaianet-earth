@@ -4,7 +4,7 @@ This document is meant to be read alongside the actual code, not instead of it �
 
 ---
 
-## Current Tab Structure (6 tabs, live in `index.html`)
+## Current Tab Structure (7 tabs, live in `index.html`)
 
 1. **🌍 Earth** — Immersive CesiumJS globe with live NASA GIBS satellite imagery and auto-rotate.
 2. **📍 Insight** — Click anywhere on the globe (or search a place) for real climate/AQI/CO₂/NDVI analytics at that point.
@@ -12,6 +12,7 @@ This document is meant to be read alongside the actual code, not instead of it �
 4. **🧠 Prediction / Forecast Lab** — Real multi-day weather + AQI forecasts, the rule-based wildfire-risk score, and the "what-if" scenario simulator.
 5. **📢 Reports** — Citizen incident reporting (select a location on the globe, then "Submit a Report" in the sidebar — no right-click gesture), cross-checked against real NASA FIRMS wildfire detections.
 6. **🌐 Global Health Index** — Country-level composite Sustainability Health Index built from real OpenAQ + Open-Meteo + MODIS data at each country's capital.
+7. **💬 Ask Gaia** — Grounded LLM chat assistant, in its own tab/right-panel like every other tab above. Used to be a floating button + small chat bubble parked outside the tab system entirely; moved in so it's reachable the same way as everything else instead of a separate corner widget.
 
 ### About the Historical Timeline / "4D Temporal Engine" tab
 This used to drive live Cesium WMTS imagery layers (NASA GIBS tiles) directly on the 3D globe, swapping a new layer in on every date change. That caused visible glitching — tiles popping in and out, rendering instability — because every tab shares the *same* Cesium scene, so churning imagery layers on it destabilized rendering globally, not just on this tab. It's been rebuilt from scratch: `js/snapshot-viewer.js` now renders flat images from NASA's Worldview Snapshot API (`wvs.earthdata.nasa.gov/api/v1/snapshot`) in its own panel, and never touches the globe's imagery layers at all. The old approach (`toggleSatelliteView`, `updateTime`, `refreshImageryLayers`, `refreshNdviImagery`, `refreshSatelliteImagery`, `toggleSplitScreen`) has been removed from `js/globe.js` entirely rather than left as dead weight. Trade-off: this is a raw satellite snapshot per date, not a cloud-free composite the way Google's Timelapse tool is — some dates may show cloud cover, and the UI says so.
@@ -47,7 +48,7 @@ There is no trained machine-learning model wired into any live endpoint in this 
 - No authentication, no automated test suite, no CI pipeline.
 - In-process caching only (Python dicts with TTLs) — cache resets on every restart, not shared across multiple backend instances.
 - `country_coords.py` covers roughly 90 countries; `/shi-global` only scores countries with a capital in that table.
-- The frontend has essentially no responsive/mobile layout today (one CSS media query, scoped to the Ask Gaia chat panel).
+- The frontend has a floor-level responsive/mobile layout (one `@media (max-width: 768px)` breakpoint covering the tab dock, side panels, insight card, and timeline strip via a "bottom sheet + bottom nav" pattern — see the comment above it in `css/style.css`) rather than a full dedicated mobile redesign. This previously only covered the old floating Ask Gaia widget; now that Gaia is a regular tab/right-panel, it's covered by the same general panel rules as everything else, with no separate override needed.
 - Accessibility (keyboard navigation, ARIA labeling) has not had a dedicated pass yet.
 
 ---

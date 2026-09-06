@@ -22,7 +22,7 @@
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
 
     <!-- Custom CSS -->
-    <link rel="stylesheet" href="css/style.css?v=10">
+    <link rel="stylesheet" href="css/style.css?v=14">
 </head>
 <body>
 
@@ -86,6 +86,9 @@
         </div>
         <div class="tab-item" data-tab="global-shi" title="Global Health Index">
             <i class="fa-solid fa-globe"></i>
+        </div>
+        <div class="tab-item" data-tab="gaia" title="Ask Gaia">
+            <i class="fa-solid fa-comment-dots"></i>
         </div>
     </nav>
 
@@ -413,13 +416,22 @@
                 </button>
             </div>
             
-            <!-- SHI Gauge (Phase 3 Spatial Design) -->
+            <!-- SHI Gauge (Phase 3 Spatial Design). Shows the currently
+                 selected location's real SHI by default (kept in sync by
+                 updateSHIGauge(), called from updateAnalyticsPanel on every
+                 location select), and temporarily shows the PROJECTED SHI
+                 after a What-If run instead — reverting the next time a
+                 location is selected or another prediction is run. Color
+                 state and status text use the exact same Healthy/Moderate/
+                 Poor vocabulary and 80/50 thresholds as the backend (see
+                 shi_composite.py) and the Insight card's SHI ring, rather
+                 than a separate ad-hoc scale. -->
             <div class="shi-gauge-container">
                 <div class="shi-gauge shi-gauge-healthy">
-                    <span class="shi-value" id="shi-value">84</span>
+                    <span class="shi-value" id="shi-value">--</span>
                     <span class="shi-label">Health Index</span>
                 </div>
-                <p class="text-center text-secondary small">Current Ecological Stability: Optimized</p>
+                <p class="text-center text-secondary small" id="shi-gauge-status-text">Select a location to see its ecological stability.</p>
             </div>
 
             <div class="location-summary" id="location-summary">
@@ -501,13 +513,22 @@
 
             <!-- Info sub-tab: legend + live feed -->
             <div class="reports-subtab-body" id="reports-subtab-info" data-subtab-body="info">
+                <!-- Palette here is deliberately drawn from colors that
+                     already exist elsewhere in the app (--danger,
+                     --warning-amber, --text-muted, plus two blues reused
+                     from the rainfall gradient and one brown reused from
+                     the NDVI bare-ground band) rather than arbitrary
+                     saturated web colors — keeps this the one tab that
+                     used to look like a different app. addReportEntity()
+                     in globe.js uses the exact same hex values for the
+                     globe pins, so the legend and the map always agree. -->
                 <div class="reports-legend">
-                    <span class="reports-legend-item"><span class="dot" style="background:#ff4500"></span>Fire</span>
-                    <span class="reports-legend-item"><span class="dot" style="background:#a020f0"></span>Pollution</span>
-                    <span class="reports-legend-item"><span class="dot" style="background:#32cd32"></span>Deforestation</span>
-                    <span class="reports-legend-item"><span class="dot" style="background:#1e90ff"></span>Water</span>
-                    <span class="reports-legend-item"><span class="dot" style="background:#4169e1"></span>Flooding</span>
-                    <span class="reports-legend-item"><span class="dot" style="background:#ffff00"></span>Other</span>
+                    <span class="reports-legend-item"><span class="dot" style="background:#ef4444"></span>Fire</span>
+                    <span class="reports-legend-item"><span class="dot" style="background:#ffb800"></span>Pollution</span>
+                    <span class="reports-legend-item"><span class="dot" style="background:#a16207"></span>Deforestation</span>
+                    <span class="reports-legend-item"><span class="dot" style="background:#38bdf8"></span>Water</span>
+                    <span class="reports-legend-item"><span class="dot" style="background:#0ea5e9"></span>Flooding</span>
+                    <span class="reports-legend-item"><span class="dot" style="background:#64748b"></span>Other</span>
                 </div>
 
                 <div id="reports-feed" class="reports-feed">
@@ -525,24 +546,30 @@
                 <form id="report-form">
                     <div class="form-group">
                         <label>Incident Type</label>
+                        <!-- Icons switched from raw color emoji (rendered
+                             inconsistently across OS/browsers and the only
+                             spot in the app not using the FontAwesome icon
+                             set) to monochrome FA glyphs tinted per-type
+                             with the same hex values as the legend dots
+                             above and the globe pins in addReportEntity(). -->
                         <div class="segmented-picker segmented-picker-wrap">
                             <input type="radio" name="incident-type" value="Fire" id="type-fire" checked>
-                            <label for="type-fire">🔥 Fire/Smoke</label>
+                            <label for="type-fire"><i class="fa-solid fa-fire" style="color:#ef4444"></i> Fire/Smoke</label>
 
                             <input type="radio" name="incident-type" value="Pollution" id="type-pollution">
-                            <label for="type-pollution">🌫️ Air Pollution</label>
+                            <label for="type-pollution"><i class="fa-solid fa-smog" style="color:#ffb800"></i> Air Pollution</label>
 
                             <input type="radio" name="incident-type" value="Deforestation" id="type-logging">
-                            <label for="type-logging">🌲 Deforestation</label>
+                            <label for="type-logging"><i class="fa-solid fa-tree" style="color:#a16207"></i> Deforestation</label>
 
                             <input type="radio" name="incident-type" value="Water" id="type-water">
-                            <label for="type-water">💧 Water Pollution</label>
+                            <label for="type-water"><i class="fa-solid fa-droplet" style="color:#38bdf8"></i> Water Pollution</label>
 
                             <input type="radio" name="incident-type" value="Flooding" id="type-flooding">
-                            <label for="type-flooding">🌊 Flooding</label>
+                            <label for="type-flooding"><i class="fa-solid fa-water" style="color:#0ea5e9"></i> Flooding</label>
 
                             <input type="radio" name="incident-type" value="Other" id="type-other">
-                            <label for="type-other">❓ Other</label>
+                            <label for="type-other"><i class="fa-solid fa-circle-question" style="color:#64748b"></i> Other</label>
                         </div>
                     </div>
 
@@ -629,6 +656,47 @@
                     </div>
                 </div>
             </div>
+        </aside>
+
+        <!-- Screen 8: Ask Gaia. Used to be a floating button + small chat
+             bubble parked in the bottom-right corner, available on every
+             tab regardless of context — moved here to be a proper 7th tab
+             with the same right-panel treatment as Reports/Global SHI
+             above, consistent with how every other feature in the app is
+             reached. #gaia-panel gets a small flex-column override in
+             style.css so the message log scrolls internally while the
+             input box stays pinned at the bottom, but its position/size
+             is otherwise entirely inherited from .right-panel — same
+             fixed sidebar, same collapse button, same mobile bottom-sheet
+             behavior everything else already has. -->
+        <aside id="gaia-panel" class="panel right-panel glass-panel hidden">
+            <div class="panel-header-row">
+                <h2>
+                    <i class="fa-solid fa-comment-dots"></i> <span>Ask Gaia</span>
+                    <span class="info-icon-wrap">
+                        <i class="fa-solid fa-circle-info info-icon"></i>
+                        <span class="info-icon-tooltip">Answers are grounded in this dashboard's real data — Gaia looks numbers up rather than guessing them.</span>
+                    </span>
+                </h2>
+                <button id="close-gaia-panel" class="panel-collapse-btn" title="Collapse panel" aria-label="Collapse panel">
+                    <i class="fa-solid fa-chevron-right"></i>
+                </button>
+            </div>
+
+            <div id="gaia-messages" class="gaia-messages">
+                <div class="gaia-message gaia-message-assistant">
+                    Hi, I'm Gaia. Ask me about conditions, forecasts, or fire risk anywhere.
+                </div>
+                <div class="gaia-suggestions" id="gaia-suggestions">
+                    <button type="button" class="gaia-suggestion-chip">AQI forecast for Nagpur this weekend</button>
+                    <button type="button" class="gaia-suggestion-chip">Is it safe outside in Delhi today?</button>
+                    <button type="button" class="gaia-suggestion-chip">Compare fire risk: Mumbai vs Pune</button>
+                </div>
+            </div>
+            <form id="gaia-input-form" class="gaia-input-form">
+                <input type="text" id="gaia-input" placeholder="Ask Gaia..." autocomplete="off" maxlength="500">
+                <button type="submit" id="gaia-send-btn"><i class="fa-solid fa-paper-plane"></i></button>
+            </form>
         </aside>
     </main>
 
@@ -720,49 +788,23 @@
          (js/ui.js's initReportsSubtabs()) so it stays contained within
          the sidebar instead of opening an external floating window. -->
 
-    <!-- Ask Gaia (Phase 3): floating button + chat panel, available on
-         every tab (kept outside the tab-visibility system deliberately —
-         same reasoning as the floating search bar). -->
-    <button id="gaia-toggle-btn" class="gaia-toggle-btn" title="Ask Gaia">
-        <i class="fa-solid fa-comment-dots"></i>
-    </button>
-
-    <div id="gaia-panel" class="gaia-panel glass-panel hidden">
-        <div class="gaia-panel-header">
-            <h3>
-                <i class="fa-solid fa-comment-dots"></i> Ask Gaia
-                <span class="info-icon-wrap">
-                    <i class="fa-solid fa-circle-info info-icon"></i>
-                    <span class="info-icon-tooltip">Answers are grounded in this dashboard's real data — Gaia looks numbers up rather than guessing them.</span>
-                </span>
-            </h3>
-            <button id="gaia-close-btn" class="close-btn"><i class="fa-solid fa-times"></i></button>
-        </div>
-        <div id="gaia-messages" class="gaia-messages">
-            <div class="gaia-message gaia-message-assistant">
-                Hi, I'm Gaia. Ask me about conditions, forecasts, or fire risk anywhere.
-            </div>
-            <div class="gaia-suggestions" id="gaia-suggestions">
-                <button type="button" class="gaia-suggestion-chip">AQI forecast for Nagpur this weekend</button>
-                <button type="button" class="gaia-suggestion-chip">Is it safe outside in Delhi today?</button>
-                <button type="button" class="gaia-suggestion-chip">Compare fire risk: Mumbai vs Pune</button>
-            </div>
-        </div>
-        <form id="gaia-input-form" class="gaia-input-form">
-            <input type="text" id="gaia-input" placeholder="Ask Gaia..." autocomplete="off" maxlength="500">
-            <button type="submit" id="gaia-send-btn"><i class="fa-solid fa-paper-plane"></i></button>
-        </form>
-    </div>
+    <!-- Ask Gaia used to live here too, as a floating button + small
+         chat bubble parked in the corner outside the tab system. Moved
+         into a proper #gaia-panel aside as the "gaia" tab's content
+         (see the "Screen 8: Ask Gaia" panel inside <main> above) — same
+         reasoning as the Reporting form above: contained within the
+         sidebar/tab system like every other feature, instead of a
+         separate floating element. -->
 
     <!-- Scripts -->
     <script src="js/config.js"></script>
     <script src="js/state.js"></script>
     <script src="js/api.js?v=12"></script>
-    <script src="js/ui.js?v=34"></script>
+    <script src="js/ui.js?v=36"></script>
     <script src="js/weather.js"></script>
     <script src="js/snapshot-viewer.js"></script>
-    <script src="js/globe.js?v=26"></script>
-    <script src="js/gaia.js?v=3"></script>
+    <script src="js/globe.js?v=27"></script>
+    <script src="js/gaia.js?v=4"></script>
     <script src="js/report.js"></script>
     <script src="js/main.js?v=2"></script>
 </body>

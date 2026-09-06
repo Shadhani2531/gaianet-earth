@@ -13,6 +13,11 @@
     --text-secondary: #94a3b8;
     --text-muted: #64748b;
     --accent-color: #00FFC2; /* Emerald Cyan */
+    --accent-color-rgb: 0, 255, 194; /* Same as --accent-color, as r,g,b for
+       use inside rgba(var(--accent-color-rgb), alpha) glow/shadow effects —
+       added so every glow in the app derives from the one real accent
+       instead of hardcoding a separate color per effect (see the old
+       #38bdf8/rgba(56,189,248,...) leftovers this replaces throughout). */
     --accent-hover: #00e6af;
     --warning-amber: #FFB800;
     --danger: #ef4444;
@@ -23,6 +28,20 @@
        the globe without softening the whole UI into glass. */
     --glass-blur: blur(10px) saturate(140%);
     --shimmer-edge: 1px solid rgba(255, 255, 255, 0.2);
+
+    /* Radius scale for the app's two deliberate design tiers (see the
+       corner-bracket comment below): "chrome" (nav bar, tab dock,
+       floating controller — rounded into bars/pills) vs. "content
+       panels" (near-square with corner brackets, instrument-style).
+       Applied to the main structural elements below; small functional
+       bars/tracks (context bars, sliders, scrollbar thumbs) are left
+       as literal half-their-own-height values since those are
+       computed from each element's own size, not part of this scale. */
+    --radius-panel: 6px;      /* content panels: left/right/insight/sensor-popup */
+    --radius-card: 10px;      /* data-nodes, stat-cards, smaller nested cards */
+    --radius-card-lg: 16px;   /* insight-card itself, larger nested cards */
+    --radius-pill: 30px;      /* top-nav, floating-controller, search bar */
+    --radius-pill-lg: 40px;   /* sidebar-tabs (taller pill dock) */
 }
 
 /* Reset & Typography */
@@ -57,7 +76,7 @@ h1, h2, h3, h4 {
     /* Sharp corners instead of the previous 24px rounding — rounded
        glass reads as "consumer app"; a near-square panel with small
        corner-bracket accents (below) reads as "instrument." */
-    border-radius: 6px;
+    border-radius: var(--radius-panel);
     box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.3);
     transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
     position: relative;
@@ -67,19 +86,21 @@ h1, h2, h3, h4 {
    corners, the classic HUD/instrument-panel framing device (flight
    displays, mission-control screens). Deliberately scoped to the
    rectangular content panels only (left/right panels, insight card,
-   sensor popup, Gaia chat) — NOT the base .glass-panel class, since
-   that's shared with pill-shaped chrome (.top-nav, .sidebar-tabs,
-   .floating-controller, .bottom-panel) whose own border-radius rules
-   round them into bars/pills where a square corner bracket would sit
-   visibly detached from the actual rounded edge. */
-.left-panel, .right-panel, .insight-card, .sensor-popup, .gaia-panel {
+   sensor popup) — NOT the base .glass-panel class, since that's shared
+   with pill-shaped chrome (.top-nav, .sidebar-tabs, .floating-controller,
+   .bottom-panel) whose own border-radius rules round them into bars/
+   pills where a square corner bracket would sit visibly detached from
+   the actual rounded edge. Ask Gaia's panel gets this for free via
+   .right-panel (it's no longer a standalone floating .gaia-panel
+   widget — see index.html's #gaia-panel), so a separate .gaia-panel
+   entry here would just be dead weight. */
+.left-panel, .right-panel, .insight-card, .sensor-popup {
     position: relative;
 }
 .left-panel::before, .left-panel::after,
 .right-panel::before, .right-panel::after,
 .insight-card::before, .insight-card::after,
-.sensor-popup::before, .sensor-popup::after,
-.gaia-panel::before, .gaia-panel::after {
+.sensor-popup::before, .sensor-popup::after {
     content: "";
     position: absolute;
     width: 12px;
@@ -89,14 +110,14 @@ h1, h2, h3, h4 {
     z-index: 2;
 }
 .left-panel::before, .right-panel::before, .insight-card::before,
-.sensor-popup::before, .gaia-panel::before {
+.sensor-popup::before {
     top: -1px;
     left: -1px;
     border-top: 1px solid var(--panel-border-strong);
     border-left: 1px solid var(--panel-border-strong);
 }
 .left-panel::after, .right-panel::after, .insight-card::after,
-.sensor-popup::after, .gaia-panel::after {
+.sensor-popup::after {
     bottom: -1px;
     right: -1px;
     border-bottom: 1px solid var(--panel-border-strong);
@@ -119,7 +140,7 @@ h1, h2, h3, h4 {
     padding: 0 1.5rem;
     height: 60px;
     z-index: 1000;
-    border-radius: 30px;
+    border-radius: var(--radius-pill);
 }
 
 .logo {
@@ -136,7 +157,11 @@ h1, h2, h3, h4 {
 .logo h1 {
     font-size: 1.5rem;
     letter-spacing: 0.5px;
-    background: linear-gradient(90deg, #38bdf8, #818cf8);
+    /* Was a blue-to-indigo gradient (#38bdf8 -> #818cf8) matching nothing
+       else in the app's actual cyan accent identity — the single most
+       visible branding element was off-palette from everything around
+       it. Now stays in the same emerald-cyan family as --accent-color. */
+    background: linear-gradient(90deg, var(--accent-color), #00b8a9);
     -webkit-background-clip: text;
     background-clip: text;
     -webkit-text-fill-color: transparent;
@@ -168,7 +193,7 @@ h1, h2, h3, h4 {
     background: rgba(11, 14, 20, 0.4);
     backdrop-filter: var(--glass-blur);
     border: var(--panel-border);
-    border-radius: 40px;
+    border-radius: var(--radius-pill-lg);
     display: flex;
     flex-direction: column;
     gap: 12px;
@@ -216,11 +241,10 @@ h1, h2, h3, h4 {
     50% { box-shadow: 0 0 25px rgba(0, 255, 194, 0.7); }
 }
 
-/* Prediction Tab (Amber) */
-body[data-active-tab="prediction"] .tab-item.active {
-    background: var(--warning-amber);
-    box-shadow: 0 0 20px rgba(255, 184, 0, 0.4);
-}
+/* Forecast Lab's tab used to get a one-off amber override here,
+   the only one of the 6 tabs that didn't share the standard cyan
+   breathing-glow .tab-item.active state above — removed so all tabs
+   are visually consistent. */
 
 /* SPATIAL HUD LAYOUT & LAYERING */
 .cesium-container { z-index: 1; }
@@ -228,7 +252,10 @@ body[data-active-tab="prediction"] .tab-item.active {
 .panel { z-index: 20; }
 .insight-card { z-index: 20; }
 .floating-controller { z-index: 30; }
-.modal-overlay, .sensor-popup, .neural-overlay { z-index: 100 !important; }
+/* .modal-overlay dropped from this selector — the element it targeted
+   (the old floating report-modal) no longer exists; see the removed
+   CITIZEN SCIENCE MODAL block further down. */
+.sensor-popup, .neural-overlay { z-index: 100 !important; }
 
 /* Lightweight notice for degraded/no-data layer states (e.g. a toggle that
    needs an API key that hasn't been configured yet) — surfaces the same
@@ -281,20 +308,10 @@ body[data-active-tab="prediction"] .tab-item.active {
 }
 
 /* Existing Panel Positions (Refined) */
-.top-nav {
-    position: fixed;
-    top: 20px;
-    left: 120px; 
-    right: 380px;
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    padding: 0 1.5rem;
-    height: 60px;
-    z-index: 1000;
-    border-radius: 30px;
-}
-
+/* .top-nav's own rule used to be duplicated here verbatim — removed
+   (see the original definition up in "Spatial HUD Layering" above);
+   two copies of the same selector is pure redundancy risk (edit one,
+   forget the other, and they silently drift apart). */
 .left-panel {
     position: fixed;
     top: 100px;
@@ -959,7 +976,8 @@ input:checked ~ .label-text i {
 .primary-btn:hover {
     background: var(--accent-hover);
     transform: translateY(-1px);
-    box-shadow: 0 4px 12px rgba(56, 189, 248, 0.3);
+    /* Was rgba(56,189,248,...) — a blue glow on a cyan button. */
+    box-shadow: 0 4px 12px rgba(var(--accent-color-rgb), 0.3);
 }
 
 .icon-btn {
@@ -1048,7 +1066,9 @@ input:checked ~ .label-text i {
 .stat-card {
     background: rgba(0, 0, 0, 0.2);
     padding: 15px;
-    border-radius: 8px;
+    /* Was 8px — snapped to match .data-node's radius (both are the
+       same kind of small stat container, just in different tabs). */
+    border-radius: var(--radius-card);
     border: 1px solid var(--panel-border);
     display: flex;
     flex-direction: column;
@@ -1234,7 +1254,8 @@ input:checked ~ .label-text i {
 
 .location-summary {
     padding: 15px;
-    background: rgba(56, 189, 248, 0.05);
+    /* Was rgba(56,189,248,...) — a blue wash behind a cyan border. */
+    background: rgba(var(--accent-color-rgb), 0.05);
     border-left: 3px solid var(--accent-color);
     border-radius: 4px;
     font-size: 0.95rem;
@@ -1295,7 +1316,8 @@ input:checked ~ .label-text i {
 
 .timeline-slider::-webkit-slider-thumb:hover {
     transform: scale(1.2);
-    box-shadow: 0 0 10px rgba(56, 189, 248, 0.5);
+    /* Was rgba(56,189,248,...) — a blue glow on a cyan thumb. */
+    box-shadow: 0 0 10px rgba(var(--accent-color-rgb), 0.5);
 }
 
 .small-dropdown {
@@ -1380,7 +1402,8 @@ body.minimal-mode #minimal-toggle {
     z-index: 1000;
     background: rgba(16, 18, 27, 0.8);
     border: 1px solid var(--accent-color);
-    box-shadow: 0 0 15px rgba(56, 189, 248, 0.4);
+    /* Was rgba(56,189,248,...) — a blue glow around a cyan border. */
+    box-shadow: 0 0 15px rgba(var(--accent-color-rgb), 0.4);
 }
 
 /* --- CINEMATIC INSIGHTS (SCREEN 2) --- */
@@ -1393,7 +1416,7 @@ body.minimal-mode #minimal-toggle {
     overflow-y: auto;
     overflow-x: hidden;
     padding: 24px;
-    border-radius: 16px;
+    border-radius: var(--radius-card-lg);
     z-index: 500;
     transition: right 0.6s cubic-bezier(0.19, 1, 0.22, 1);
 }
@@ -1521,7 +1544,7 @@ body.minimal-mode #minimal-toggle {
 .data-node {
     background: rgba(255, 255, 255, 0.05);
     padding: 12px;
-    border-radius: 10px;
+    border-radius: var(--radius-card);
     border: 1px solid rgba(255, 255, 255, 0.1);
 }
 
@@ -1708,7 +1731,11 @@ body.minimal-mode #minimal-toggle {
     width: 100%;
     height: 6px;
     background: rgba(255, 255, 255, 0.1);
-    border-radius: 5px;
+    /* Was 5px on a 6px-tall track — every other track/bar in the app
+       (.anomaly-bar, .anomaly-fill, .co2-context-bar) uses exactly
+       half its own height for a true pill shape; this was the one
+       that didn't match its own convention. */
+    border-radius: 3px;
     appearance: none;
     cursor: pointer;
 }
@@ -1789,62 +1816,23 @@ body.minimal-mode #minimal-toggle {
     flex-shrink: 0;
 }
 
-/* --- 5-TAB NAVIGATION SYSTEM --- */
-
-.sidebar-tabs {
-    position: fixed;
-    left: 20px;
-    top: 50%;
-    transform: translateY(-50%);
-    width: 80px;
-    display: flex;
-    flex-direction: column;
-    gap: 15px;
-    padding: 20px 0;
-    z-index: 1000;
-    border-radius: 40px;
-    align-items: center;
-}
-
-.tab-item {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    gap: 5px;
-    cursor: pointer;
-    width: 60px;
-    height: 60px;
-    justify-content: center;
-    border-radius: 15px;
-    transition: all 0.3s ease;
-    color: var(--text-secondary);
-}
-
-.tab-item i {
-    font-size: 1.4rem;
-}
-
-.tab-label {
-    font-size: 0.65rem;
-    text-transform: uppercase;
-    font-weight: 600;
-    opacity: 0.7;
-}
-
-.tab-item:hover {
-    color: var(--text-primary);
-    background: rgba(255, 255, 255, 0.05);
-}
-
-.tab-item.active {
-    background: var(--accent-color);
-    color: #000;
-    box-shadow: 0 0 15px rgba(56, 189, 248, 0.4);
-}
-
-.tab-item.active .tab-label {
-    opacity: 1;
-}
+/* --- 5-TAB NAVIGATION SYSTEM ---
+   This whole block (.sidebar-tabs/.tab-item/.tab-label and their
+   variants) was a leftover, earlier version of the tab dock — it
+   redefined the same selectors already set up correctly above under
+   "Tab Dock (Pill Shape)" / near .tab-item's first definition, so it
+   was pure dead weight EXCEPT that CSS applies later rules per-property
+   on ties, so several of its properties were actually winning over the
+   real system: the dock rendered 80px wide (not the intended 72px)
+   with a lower z-index, tabs rendered as 60px squares (not 48px
+   circles) with 1.4rem icons, and — most visibly — the active tab's
+   glow silently fell back to a leftover blue (rgba(56,189,248,...))
+   and lost its breathingGlow animation entirely, since this block's
+   plainer .tab-item.active came after and had equal specificity. Also
+   referenced a .tab-label span that doesn't exist in the current
+   HTML (tabs use a `title` attribute + tooltip instead), making that
+   part dead on arrival. Removed entirely; the one real definition
+   above (in the top-nav/sidebar-tabs section) is now the only one. */
 
 /* --- TAB VISIBILITY RULES --- */
 
@@ -1910,34 +1898,11 @@ body.minimal-mode .sidebar-tabs {
     opacity: 0;
     pointer-events: none;
 }
-/* --- CITIZEN SCIENCE MODAL --- */
-.modal-overlay {
-    position: fixed;
-    top: 0;
-    left: 0;
-    width: 100%;
-    height: 100%;
-    background: rgba(0, 0, 0, 0.6);
-    backdrop-filter: blur(4px);
-    z-index: 2000;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    transition: opacity 0.3s ease;
-}
-
-.modal-content {
-    width: 450px;
-    padding: 30px;
-    border-radius: 20px;
-    position: relative;
-    animation: modalSlideUp 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275);
-}
-
-@keyframes modalSlideUp {
-    from { opacity: 0; transform: translateY(30px); }
-    to { opacity: 1; transform: translateY(0); }
-}
+/* The old "CITIZEN SCIENCE MODAL" (.modal-overlay / .modal-content /
+   @keyframes modalSlideUp) was removed here — it styled a floating
+   report popup that was replaced by the Reports panel's "Submit
+   Report" sub-tab a while back (see index.html's comment on
+   #reports-subtab-submit) and hadn't rendered anything since. */
 
 /* --- PHASE 3 ENHANCEMENTS: SCANNING & LEGENDS --- */
 
@@ -1953,7 +1918,11 @@ body.minimal-mode .sidebar-tabs {
     align-items: center;
     justify-content: center;
     z-index: 50;
-    border-radius: 24px;
+    /* Was 24px — its parent .insight-card (the only element this
+       overlay ever covers, via the inset:0 above) rounds at
+       var(--radius-card-lg), so the overlay's corners didn't
+       actually line up with the card's. */
+    border-radius: var(--radius-card-lg);
     backdrop-filter: blur(5px);
 }
 
@@ -2151,7 +2120,7 @@ body.minimal-mode .sidebar-tabs {
     align-items: center;
     gap: 12px;
     z-index: 2005;
-    border-radius: 30px;
+    border-radius: var(--radius-pill);
     background: rgba(11, 14, 20, 0.4);
     backdrop-filter: var(--glass-blur);
     border: var(--panel-border);
@@ -2231,6 +2200,36 @@ input[type="range"].timeline-slider::-webkit-slider-thumb:hover {
     letter-spacing: 1px;
     opacity: 0.7;
 }
+
+/* SHI gauge risk states — mirrors the Insight card's SHI ring
+   (.insight-shi-badge.risk-healthy/moderate/poor) so the same score
+   reads with the same color everywhere in the app, using the same
+   Healthy (>=80) / Moderate (>=50) / Poor (<50) thresholds the backend
+   returns (shi_composite.py). Selector is qualified with .shi-gauge so
+   these always win over the plain .shi-gauge rule regardless of source
+   order. These previously had no CSS at all, so updateSHIGauge()'s
+   class-toggling had zero visible effect — the gauge always looked
+   "healthy" no matter the real score. */
+.shi-gauge.shi-gauge-healthy {
+    border-color: var(--success);
+    background: rgba(34, 197, 94, 0.05);
+    box-shadow: 0 0 30px rgba(34, 197, 94, 0.15);
+}
+.shi-gauge.shi-gauge-healthy .shi-value { color: var(--success); }
+
+.shi-gauge.shi-gauge-moderate {
+    border-color: var(--warning-amber);
+    background: rgba(255, 184, 0, 0.05);
+    box-shadow: 0 0 30px rgba(255, 184, 0, 0.15);
+}
+.shi-gauge.shi-gauge-moderate .shi-value { color: var(--warning-amber); }
+
+.shi-gauge.shi-gauge-poor {
+    border-color: var(--danger);
+    background: rgba(239, 68, 68, 0.05);
+    box-shadow: 0 0 30px rgba(239, 68, 68, 0.15);
+}
+.shi-gauge.shi-gauge-poor .shi-value { color: var(--danger); }
 
 /* Neural Scan HUD */
 .neural-overlay {
@@ -2766,67 +2765,18 @@ input[type="range"].timeline-slider::-webkit-slider-thumb:hover {
     border-radius: 8px;
 }
 
-/* --- Ask Gaia (Phase 3): floating button + chat panel --- */
-.gaia-toggle-btn {
-    position: fixed;
-    bottom: 24px;
-    right: 24px;
-    width: 56px;
-    height: 56px;
-    border-radius: 50%;
-    background: var(--accent-color);
-    color: #04121a;
-    border: none;
-    font-size: 1.4rem;
-    cursor: pointer;
-    box-shadow: 0 8px 24px rgba(0, 255, 194, 0.35);
-    z-index: 900;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    transition: transform 0.2s ease;
-}
-
-.gaia-toggle-btn:hover {
-    transform: scale(1.08);
-}
-
-.gaia-panel {
-    position: fixed;
-    bottom: 92px;
-    right: 24px;
-    width: 340px;
-    max-width: calc(100vw - 32px);
-    height: 460px;
-    max-height: calc(100vh - 140px);
+/* --- Ask Gaia: now the "gaia" tab's right-panel content (see
+   index.html's #gaia-panel, a .panel.right-panel.glass-panel like
+   Reports/Global SHI) instead of a floating button + corner chat
+   bubble. All position/size/collapse/mobile-bottom-sheet behavior is
+   inherited from .glass-panel/.right-panel for free — this only adds
+   the flex-column override so the input box stays pinned at the
+   bottom while the message log scrolls internally, plus the
+   chat-bubble styling below, which is unchanged from before. */
+#gaia-panel {
     display: flex;
     flex-direction: column;
-    z-index: 900;
-    padding: 16px;
-}
-
-.gaia-panel.hidden {
-    display: none;
-}
-
-.gaia-panel-header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    position: relative;
-    padding-right: 24px;
-}
-
-.gaia-panel-header h3 {
-    margin: 0;
-    font-size: 1rem;
-    display: flex;
-    align-items: center;
-    gap: 8px;
-}
-
-.gaia-panel-sub {
-    margin: 6px 0 12px 0;
+    overflow: hidden;
 }
 
 .gaia-messages {
@@ -3044,15 +2994,11 @@ input[type="range"].timeline-slider::-webkit-slider-thumb:hover {
 }
 
 @media (max-width: 480px) {
-    .gaia-panel {
-        right: 16px;
-        bottom: 84px;
-        width: calc(100vw - 32px);
-    }
-    .gaia-toggle-btn {
-        right: 16px;
-        bottom: 16px;
-    }
+    /* #gaia-panel's old corner-widget overrides (.gaia-panel/
+       .gaia-toggle-btn position tweaks) were removed here — it's a
+       .right-panel now, so it already gets the same full-width
+       bottom-sheet treatment as every other panel at the 768px
+       breakpoint above; no separate override needed. */
 
     .stats-grid,
     .insight-grid {

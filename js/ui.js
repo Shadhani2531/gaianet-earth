@@ -43,6 +43,7 @@ class UIManager {
             { panelId: 'right-panel', btnId: 'right-panel-collapse', collapseIcon: 'fa-chevron-right', expandIcon: 'fa-chevron-left' },
             { panelId: 'global-shi-panel', btnId: 'close-global-shi', collapseIcon: 'fa-chevron-right', expandIcon: 'fa-chevron-left' },
             { panelId: 'reports-panel', btnId: 'close-reports-panel', collapseIcon: 'fa-chevron-right', expandIcon: 'fa-chevron-left' },
+            { panelId: 'gaia-panel', btnId: 'close-gaia-panel', collapseIcon: 'fa-chevron-right', expandIcon: 'fa-chevron-left' },
         ];
 
         panels.forEach(({ panelId, btnId, collapseIcon, expandIcon }) => {
@@ -140,14 +141,14 @@ class UIManager {
         'layer-temp': { label: 'Temperature Anomaly (vs. seasonal baseline)', type: 'gradient', stops: ['#08306b', '#6bafd6', '#e6e6e6', '#fd8d3c', '#a50f15'], words: ['-4°C', '-2°C', '0°C', '+2°C', '+4°C'], subLabel: 'Colder ←—— Average ——→ Warmer' },
         'layer-ndvi': { label: 'Vegetation (NDVI, NASA MODIS)', type: 'gradient', stops: ['#a16207', '#bebe28', '#84cc16', '#228b22', '#0a4114'], words: ['0.0', '0.2', '0.4', '0.6', '1.0'], subLabel: 'Bare/Sparse ←—— Low —— Moderate ——→ Dense' },
         'layer-wildfires': { label: 'Active wildfires', type: 'dots', stops: ['#f5b942', '#f2792e', '#e6432c', '#b31f1f', '#6e0f0f'], words: ['Low', 'Extreme (pulsing)'] },
-        // 'layer-sensors' (Global Air Quality / OpenAQ) intentionally has
-        // no entry here anymore — it no longer renders anything on the
-        // globe (repurposed for Insight card verification only, see
-        // updateAqiVerificationNode), so there's no color scale to
-        // explain in this legend.
-        'layer-rainfall': { label: 'Rainfall (last hour)', type: 'gradient', stops: ['#78716c', '#7dd3fc', '#0ea5e9', '#1e3a8a'], words: ['Dry', 'Heavy'] },
-        'layer-weather': { label: 'Cloud cover', type: 'gradient', stops: ['#fde047', '#cbd5e1', '#64748b'], words: ['Clear', 'Overcast'] },
-        'layer-wind': { label: 'Wind speed — arrow points downwind', type: 'gradient', stops: ['#7dd3fc', '#38bdf8', '#e8c547', '#e6432c'], words: ['Calm', 'Severe'] },
+        // 'layer-sensors' (Global Air Quality / OpenAQ), 'layer-rainfall',
+        // 'layer-weather', and 'layer-wind' intentionally have no entry
+        // here anymore — none of them render anything on the globe any
+        // longer (all repurposed to solely gate Insight card nodes/
+        // history charts, see loadLocationAnalytics's comments in
+        // globe.js), so there's no color scale left to explain in this
+        // legend. Only layers that still paint something on the globe
+        // itself (Temperature, Vegetation, Wildfires) belong here.
     };
 
     // Renders only the legend entries for layers currently switched on —
@@ -421,14 +422,29 @@ class UIManager {
         }).join('');
     }
 
-    updateSHIGauge(score) {
+    // Updates the right-panel Health Index gauge. `riskLabel`, when the
+    // caller already has one (shiData.risk / after.risk from the backend),
+    // is used verbatim so this never invents its own wording — it only
+    // falls back to computing Healthy/Moderate/Poor locally (matching
+    // shi_composite.py's 80/50 thresholds) if no label was passed in.
+    // Previously this toggled 'shi-gauge-warning'/'shi-gauge-critical'
+    // classes that had no matching CSS rules at all, so the gauge never
+    // visibly changed color regardless of score — see style.css.
+    updateSHIGauge(score, riskLabel) {
         const gauge = document.querySelector('.shi-gauge');
         const value = document.getElementById('shi-value');
+        const statusText = document.getElementById('shi-gauge-status-text');
         if (value) value.innerText = Math.round(score);
-        
+
+        const risk = riskLabel || (score >= 80 ? 'Healthy' : score >= 50 ? 'Moderate' : 'Poor');
+        const riskClass = risk === 'Healthy' ? 'shi-gauge-healthy' : risk === 'Moderate' ? 'shi-gauge-moderate' : 'shi-gauge-poor';
+
         if (gauge) {
-            gauge.classList.toggle('shi-gauge-warning', score < 60);
-            gauge.classList.toggle('shi-gauge-critical', score < 40);
+            gauge.classList.remove('shi-gauge-healthy', 'shi-gauge-moderate', 'shi-gauge-poor');
+            gauge.classList.add(riskClass);
+        }
+        if (statusText) {
+            statusText.innerText = `Current Ecological Stability: ${risk}`;
         }
     }
 
@@ -484,8 +500,11 @@ class UIManager {
         else if (after.shi > before.shi) afterSide.classList.add('better');
 
         // Also reflect the projected SHI on the main right-panel gauge,
-        // so the "what if" outcome is visible at a glance app-wide.
-        this.updateSHIGauge(after.shi);
+        // so the "what if" outcome is visible at a glance app-wide. This
+        // temporarily overrides the current-location value updateSHIGauge
+        // otherwise shows (see updateAnalyticsPanel) until the next
+        // location select or prediction run.
+        this.updateSHIGauge(after.shi, after.risk);
 
         // Narrative
         document.getElementById('prediction-narrative').innerText = result.narrative;
@@ -732,6 +751,7 @@ class UIManager {
             'reports': document.getElementById('reports-panel'),
             'globalShi': document.getElementById('global-shi-panel'),
             'prediction': document.getElementById('prediction-panel'),
+            'gaia': document.getElementById('gaia-panel'),
             'intelligence': document.querySelector('.layer-group'), 
             'shi_gauge': document.querySelector('.shi-gauge-container'),
             // NOTE: previously also included 'charts':
@@ -811,6 +831,17 @@ class UIManager {
             case 'global-shi':
                 if(uiElements.globalShi) uiElements.globalShi.classList.remove('hidden');
                 this.loadGlobalShi();
+                break;
+
+            case 'gaia':
+                // Ask Gaia used to be a floating button+bubble outside
+                // this whole tab system — now it's a plain right-panel
+                // like Reports/Global SHI above. Focusing the input on
+                // entry mirrors the old togglePanel(true)'s "focus on
+                // open" behavior, just triggered by tab entry instead
+                // of a dedicated toggle button (removed from gaia.js).
+                if(uiElements.gaia) uiElements.gaia.classList.remove('hidden');
+                document.getElementById('gaia-input')?.focus();
                 break;
         }
 
@@ -1538,6 +1569,16 @@ class UIManager {
                     <p style="font-size: 0.8rem; color: var(--text-secondary); margin: 0;">Status: ${shiData.risk}</p>
                 </div>
             `;
+
+            // Keep the right-panel Health Index gauge in sync with the
+            // actually-selected location on every load — this used to be
+            // set once at 84/"Optimized" and never updated except after
+            // running a What-If prediction (which shows the PROJECTED
+            // score instead, on purpose). Calling it here means the
+            // gauge always reflects the real current location by
+            // default, and only shows a prediction's projection
+            // temporarily until the next location select.
+            this.updateSHIGauge(shiData.shi, shiData.risk);
         }
         
         document.getElementById('location-summary').innerHTML = summaryHtml;

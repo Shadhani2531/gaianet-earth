@@ -11,17 +11,19 @@ class GaiaChat {
         this.history = []; // [{role, content}, ...] — mirrors what's rendered
         this.isSending = false;
 
-        this.toggleBtn = document.getElementById('gaia-toggle-btn');
+        // Ask Gaia used to be a floating button+bubble with its own
+        // open/close toggle, independent of the tab system — it's now
+        // the "gaia" tab's content instead (see ui.js's switchTab()),
+        // so show/hide and focus-on-entry are handled there. Only the
+        // chat internals (panel content, form, messages) are wired up
+        // here now.
         this.panel = document.getElementById('gaia-panel');
-        this.closeBtn = document.getElementById('gaia-close-btn');
         this.messagesEl = document.getElementById('gaia-messages');
         this.form = document.getElementById('gaia-input-form');
         this.input = document.getElementById('gaia-input');
 
-        if (!this.toggleBtn || !this.panel) return; // markup not present — nothing to wire up
+        if (!this.panel) return; // markup not present — nothing to wire up
 
-        this.toggleBtn.addEventListener('click', () => this.togglePanel());
-        this.closeBtn?.addEventListener('click', () => this.togglePanel(false));
         this.form?.addEventListener('submit', (e) => {
             e.preventDefault();
             this.sendMessage();
@@ -33,12 +35,6 @@ class GaiaChat {
             this.input.value = chip.textContent;
             this.sendMessage();
         });
-    }
-
-    togglePanel(force) {
-        const show = force !== undefined ? force : this.panel.classList.contains('hidden');
-        this.panel.classList.toggle('hidden', !show);
-        if (show) this.input?.focus();
     }
 
     async sendMessage() {
