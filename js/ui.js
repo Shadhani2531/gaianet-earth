@@ -2,7 +2,9 @@ class UIManager {
     constructor() {
         this.tempChart = null;
         this.precipChart = null;
-        this.insightChart = null;
+        this.tempHistoryChart = null;
+        this.ndviHistoryChart = null;
+        this.rainfallHistoryChart = null;
         this.aqiForecastChart = null;
 
         this.initEventListeners();
@@ -138,7 +140,11 @@ class UIManager {
         'layer-temp': { label: 'Temperature Anomaly (vs. seasonal baseline)', type: 'gradient', stops: ['#08306b', '#6bafd6', '#e6e6e6', '#fd8d3c', '#a50f15'], words: ['-4°C', '-2°C', '0°C', '+2°C', '+4°C'], subLabel: 'Colder ←—— Average ——→ Warmer' },
         'layer-ndvi': { label: 'Vegetation (NDVI, NASA MODIS)', type: 'gradient', stops: ['#a16207', '#bebe28', '#84cc16', '#228b22', '#0a4114'], words: ['0.0', '0.2', '0.4', '0.6', '1.0'], subLabel: 'Bare/Sparse ←—— Low —— Moderate ——→ Dense' },
         'layer-wildfires': { label: 'Active wildfires', type: 'dots', stops: ['#f5b942', '#f2792e', '#e6432c', '#b31f1f', '#6e0f0f'], words: ['Low', 'Extreme (pulsing)'] },
-        'layer-sensors': { label: 'Air quality (PM2.5) — station markers', type: 'dots', stops: ['#22c55e', '#eab308', '#f97316', '#ef4444', '#a855f7', '#7f1d1d'], words: ['Good', 'Hazardous'] },
+        // 'layer-sensors' (Global Air Quality / OpenAQ) intentionally has
+        // no entry here anymore — it no longer renders anything on the
+        // globe (repurposed for Insight card verification only, see
+        // updateAqiVerificationNode), so there's no color scale to
+        // explain in this legend.
         'layer-rainfall': { label: 'Rainfall (last hour)', type: 'gradient', stops: ['#78716c', '#7dd3fc', '#0ea5e9', '#1e3a8a'], words: ['Dry', 'Heavy'] },
         'layer-weather': { label: 'Cloud cover', type: 'gradient', stops: ['#fde047', '#cbd5e1', '#64748b'], words: ['Clear', 'Overcast'] },
         'layer-wind': { label: 'Wind speed — arrow points downwind', type: 'gradient', stops: ['#7dd3fc', '#38bdf8', '#e8c547', '#e6432c'], words: ['Calm', 'Severe'] },
@@ -728,7 +734,19 @@ class UIManager {
             'prediction': document.getElementById('prediction-panel'),
             'intelligence': document.querySelector('.layer-group'), 
             'shi_gauge': document.querySelector('.shi-gauge-container'),
-            'charts': document.querySelectorAll('.chart-container'),
+            // NOTE: previously also included 'charts':
+            // document.querySelectorAll('.chart-container') here, which
+            // added 'hidden' to EVERY chart-container on the page on every
+            // tab switch — but no tab case (not even 'insight', not even
+            // 'prediction'/'forecast', which actually needs its charts)
+            // ever removed it again. That silently broke every chart in
+            // the app (mini trend sparkline, tempChart, precipChart,
+            // ndviHistoryChart) behind a class no code ever undid. Removed
+            // entirely: chart visibility already correctly follows its
+            // parent panel's own show/hide (insight-card, right-panel):
+            // there's no case where a chart should be hidden while its
+            // parent panel is shown, so this extra independent toggle was
+            // pure redundant risk with no upside.
             'ndvi_legend': document.getElementById('ndvi-legend-box')
         };
 
@@ -1054,26 +1072,159 @@ class UIManager {
             }
         });
 
-        const ctxInsight = document.getElementById('insightChart').getContext('2d');
-        this.insightChart = new Chart(ctxInsight, {
+        // Temperature History chart — real yearly comparison (was
+        // previously the always-on 6-month sparkline). Unlike NDVI's
+        // fixed 0-1 range, temperature can be negative and its real
+        // range varies hugely by location (a Delhi summer and an
+        // Antarctic reading aren't on any shared fixed scale), so this
+        // deliberately leaves y min/max unset and lets Chart.js auto-scale
+        // per location rather than picking one number that would be
+        // wrong most of the time. spanGaps: false for the same honesty
+        // reason as ndviHistoryChart below: a missing year (see
+        // get_temperature_history's data_source: "unavailable") must
+        // show as a visible gap, never bridged/interpolated.
+        const ctxTempHistory = document.getElementById('tempHistoryChart').getContext('2d');
+        this.tempHistoryChart = new Chart(ctxTempHistory, {
             type: 'line',
             data: {
-                labels: ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun'],
+                labels: [],
                 datasets: [{
-                    label: 'Trend',
-                    data: [0, 0, 0, 0, 0, 0],
-                    borderColor: '#38bdf8',
-                    tension: 0.4,
-                    pointRadius: 0
+                    label: 'Temperature',
+                    data: [],
+                    borderColor: '#f97316',
+                    backgroundColor: 'rgba(249, 115, 22, 0.1)',
+                    tension: 0.3,
+                    spanGaps: false,
+                    pointRadius: 4,
+                    pointBackgroundColor: '#f97316',
+                    fill: true
                 }]
             },
             options: {
                 responsive: true,
                 maintainAspectRatio: false,
-                plugins: { legend: { display: false } },
+                plugins: {
+                    legend: { display: false },
+                    tooltip: {
+                        callbacks: {
+                            label: (ctx) => ctx.parsed.y === null
+                                ? 'No real data for this year'
+                                : `${ctx.parsed.y.toFixed(1)}°C`
+                        }
+                    }
+                },
                 scales: {
-                    y: { display: false },
-                    x: { display: false }
+                    y: {
+                        grid: { color: 'rgba(255,255,255,0.05)' },
+                        ticks: { color: '#94a3b8', font: { size: 10 } }
+                    },
+                    x: {
+                        grid: { display: false },
+                        ticks: { color: '#94a3b8', font: { size: 10 } }
+                    }
+                }
+            }
+        });
+
+        // Vegetation History chart — a real labeled trend (year -> NDVI),
+        // not a sparkline, so unlike the old always-on sparkline this one
+        // shows its axes. spanGaps: false is deliberate: a null value for
+        // a year means "no real MODIS composite found within tolerance"
+        // (see get_ndvi_history's data_source: "unavailable"), and this
+        // must render as a visible gap in the line, never bridged/interpolated
+        // — bridging it would visually fabricate a value that was never
+        // measured.
+        const ctxNdviHistory = document.getElementById('ndviHistoryChart').getContext('2d');
+        this.ndviHistoryChart = new Chart(ctxNdviHistory, {
+            type: 'line',
+            data: {
+                labels: [],
+                datasets: [{
+                    label: 'NDVI',
+                    data: [],
+                    borderColor: '#22c55e',
+                    backgroundColor: 'rgba(34, 197, 94, 0.1)',
+                    tension: 0.3,
+                    spanGaps: false,
+                    pointRadius: 4,
+                    pointBackgroundColor: '#22c55e',
+                    fill: true
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: {
+                    legend: { display: false },
+                    tooltip: {
+                        callbacks: {
+                            label: (ctx) => ctx.parsed.y === null
+                                ? 'No real data for this year'
+                                : `NDVI ${ctx.parsed.y.toFixed(3)}`
+                        }
+                    }
+                },
+                scales: {
+                    y: {
+                        min: 0,
+                        max: 1,
+                        grid: { color: 'rgba(255,255,255,0.05)' },
+                        ticks: { color: '#94a3b8', font: { size: 10 } }
+                    },
+                    x: {
+                        grid: { display: false },
+                        ticks: { color: '#94a3b8', font: { size: 10 } }
+                    }
+                }
+            }
+        });
+
+        // Rainfall History chart — a BAR chart, deliberately different
+        // from the line charts above: this is a discrete annual total
+        // per year (not a continuous trend the way temperature/NDVI are
+        // sampled), so bars are the more conventional, immediately
+        // legible shape for "amount per year." A missing year (data_
+        // source: "unavailable" from get_rainfall_history, e.g. below the
+        // completeness threshold) simply has no bar — Chart.js already
+        // renders a null value as an absent bar, no spanGaps equivalent
+        // needed for bar charts.
+        const ctxRainfallHistory = document.getElementById('rainfallHistoryChart').getContext('2d');
+        this.rainfallHistoryChart = new Chart(ctxRainfallHistory, {
+            type: 'bar',
+            data: {
+                labels: [],
+                datasets: [{
+                    label: 'Annual rainfall',
+                    data: [],
+                    backgroundColor: 'rgba(56, 189, 248, 0.7)',
+                    borderColor: '#38bdf8',
+                    borderWidth: 1,
+                    borderRadius: 3,
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: {
+                    legend: { display: false },
+                    tooltip: {
+                        callbacks: {
+                            label: (ctx) => ctx.parsed.y === null
+                                ? 'No real data for this year'
+                                : `${ctx.parsed.y.toLocaleString()} mm`
+                        }
+                    }
+                },
+                scales: {
+                    y: {
+                        beginAtZero: true,
+                        grid: { color: 'rgba(255,255,255,0.05)' },
+                        ticks: { color: '#94a3b8', font: { size: 10 } }
+                    },
+                    x: {
+                        grid: { display: false },
+                        ticks: { color: '#94a3b8', font: { size: 10 } }
+                    }
                 }
             }
         });
@@ -1205,12 +1356,6 @@ class UIManager {
             return;
         }
 
-        const iconFor = (precipMm) => {
-            if (precipMm >= 10) return 'fa-cloud-showers-heavy';
-            if (precipMm >= 1) return 'fa-cloud-rain';
-            return 'fa-sun';
-        };
-
         strip.innerHTML = forecastData.days.map(day => {
             const date = new Date(day.date + 'T00:00:00');
             const label = date.toLocaleDateString('default', { weekday: 'short' });
@@ -1218,12 +1363,57 @@ class UIManager {
             return `
                 <div class="forecast-day" title="${day.date}">
                     <span class="forecast-day-label">${label}</span>
-                    <i class="fa-solid ${iconFor(precip)} forecast-day-icon"></i>
+                    <i class="fa-solid ${this._precipIcon(precip)} forecast-day-icon"></i>
                     <span class="forecast-day-temp">${day.temp_max_c ?? '--'}° / ${day.temp_min_c ?? '--'}°</span>
                     <span class="forecast-day-precip">${precip}mm</span>
                 </div>
             `;
         }).join('');
+    }
+
+    // Shared mm->icon mapping so the same rainfall amount always reads the
+    // same way in both the 7-day forecast strip and the insight card's
+    // rainfall node, rather than two independently-tuned thresholds.
+    _precipIcon(precipMm) {
+        if (precipMm === null || precipMm === undefined) return 'fa-sun';
+        if (precipMm >= 10) return 'fa-cloud-showers-heavy';
+        if (precipMm >= 1) return 'fa-cloud-rain';
+        return 'fa-sun';
+    }
+
+    // Temperature band -> {icon, colorVar}, matching the same cold/mild/hot
+    // language used in _aqiColor() below (fixed thresholds over a real
+    // reading, not a new data source).
+    _tempBand(tempC) {
+        if (tempC === null || tempC === undefined) return { icon: 'fa-temperature-half', color: 'var(--accent-color)' };
+        if (tempC < 10) return { icon: 'fa-temperature-low', color: 'var(--accent-color)' };
+        if (tempC <= 25) return { icon: 'fa-temperature-half', color: 'var(--success)' };
+        if (tempC <= 32) return { icon: 'fa-temperature-three-quarters', color: 'var(--warning-amber)' };
+        return { icon: 'fa-temperature-high', color: 'var(--danger)' };
+    }
+
+    // AQI numeric value -> category label, using the exact same thresholds
+    // as _aqiColor() so the color and the label never drift apart.
+    _aqiCategory(aqi) {
+        if (aqi === null || aqi === undefined) return '';
+        if (aqi <= 50) return 'Good';
+        if (aqi <= 100) return 'Moderate';
+        if (aqi <= 150) return 'Unhealthy for sensitive groups';
+        if (aqi <= 200) return 'Unhealthy';
+        if (aqi <= 300) return 'Very unhealthy';
+        return 'Hazardous';
+    }
+
+    // NDVI value -> {icon, color}, collapsing globeManager's 5-tier
+    // _ndviClassification() text into a 3-tier color/icon read (the same
+    // health-color bands the right panel's stat-ndvi already uses, though
+    // that one referenced a non-existent 'var(--warning)' CSS variable —
+    // fixed here to the actual var(--warning-amber) token).
+    _ndviBand(ndvi) {
+        if (ndvi === null || ndvi === undefined) return { icon: 'fa-seedling', color: 'var(--text-secondary)' };
+        if (ndvi <= 0.2) return { icon: 'fa-mountain', color: 'var(--danger)' };
+        if (ndvi <= 0.6) return { icon: 'fa-seedling', color: 'var(--warning-amber)' };
+        return { icon: 'fa-tree', color: 'var(--success)' };
     }
 
     _updateAqiForecastChart(aqiForecastData) {
@@ -1259,6 +1449,49 @@ class UIManager {
         }
     }
 
+    // Shared by both the right-panel stat (below) and the Insight card's
+    // wildfire node, so the two never drift into disagreeing colors.
+    _wildfireRiskColor(category) {
+        const colorByCategory = {
+            'Low': 'var(--success)',
+            'Moderate': 'var(--warning-amber)',
+            'High': '#f97316',
+            'Extreme': 'var(--danger)',
+        };
+        return colorByCategory[category] || '';
+    }
+
+    // Formats the real inputs behind the rule-based index into one
+    // readable string — shared for the same reason as the color map above.
+    _wildfireInputsText(inputs) {
+        inputs = inputs || {};
+        const parts = [];
+        if (inputs.temp_c !== null && inputs.temp_c !== undefined) parts.push(`${inputs.temp_c}°C`);
+        if (inputs.humidity_pct !== null && inputs.humidity_pct !== undefined) parts.push(`${inputs.humidity_pct}% humidity`);
+        if (inputs.wind_kmh !== null && inputs.wind_kmh !== undefined) parts.push(`${inputs.wind_kmh}km/h wind`);
+        if (inputs.ndvi !== null && inputs.ndvi !== undefined) parts.push(`NDVI ${inputs.ndvi}`);
+        return parts;
+    }
+
+    // Shared "FORMULA" badge — distinct from _setStatBadge's LIVE/EST
+    // vocabulary, since a rule-based derived value is neither a raw
+    // measurement nor a degraded fallback; labeling it EST would be
+    // misleading in the other direction. Used by both the right-panel
+    // stat and the Insight card's wildfire node.
+    _setFormulaBadge(valueElId, title) {
+        const valueEl = document.getElementById(valueElId);
+        if (!valueEl) return;
+        let badge = valueEl.parentElement.querySelector(`.data-source-badge[data-for="${valueElId}"]`);
+        if (!badge) {
+            badge = document.createElement('span');
+            badge.className = 'data-source-badge formula';
+            badge.dataset.for = valueElId;
+            badge.textContent = 'FORMULA';
+            valueEl.insertAdjacentElement('afterend', badge);
+        }
+        badge.title = title;
+    }
+
     _updateWildfireRiskStat(wildfireRiskData) {
         const valueEl = document.getElementById('stat-risk');
         const detailEl = document.getElementById('stat-risk-detail');
@@ -1272,37 +1505,11 @@ class UIManager {
         }
 
         valueEl.textContent = `${wildfireRiskData.score} (${wildfireRiskData.category})`;
-
-        // Not live/fallback like the other stats — this is always a
-        // derived formula over real inputs, so it gets its own badge
-        // rather than reusing the live/estimated vocabulary, which
-        // would misleadingly imply it's either a raw measurement or a
-        // degraded one.
-        let formulaBadge = valueEl.parentElement.querySelector('.data-source-badge[data-for="stat-risk"]');
-        if (!formulaBadge) {
-            formulaBadge = document.createElement('span');
-            formulaBadge.className = 'data-source-badge formula';
-            formulaBadge.dataset.for = 'stat-risk';
-            formulaBadge.textContent = 'FORMULA';
-            formulaBadge.title = 'Rule-based fire danger index from real inputs — not a trained ML model.';
-            valueEl.insertAdjacentElement('afterend', formulaBadge);
-        }
-
-        const colorByCategory = {
-            'Low': 'var(--success)',
-            'Moderate': 'var(--warning-amber)',
-            'High': '#f97316',
-            'Extreme': 'var(--danger)',
-        };
-        valueEl.style.color = colorByCategory[wildfireRiskData.category] || '';
+        this._setFormulaBadge('stat-risk', 'Rule-based fire danger index from real inputs — not a trained ML model.');
+        valueEl.style.color = this._wildfireRiskColor(wildfireRiskData.category);
 
         if (detailEl) {
-            const inputs = wildfireRiskData.inputs || {};
-            const parts = [];
-            if (inputs.temp_c !== null && inputs.temp_c !== undefined) parts.push(`${inputs.temp_c}°C`);
-            if (inputs.humidity_pct !== null && inputs.humidity_pct !== undefined) parts.push(`${inputs.humidity_pct}% humidity`);
-            if (inputs.wind_kmh !== null && inputs.wind_kmh !== undefined) parts.push(`${inputs.wind_kmh}km/h wind`);
-            if (inputs.ndvi !== null && inputs.ndvi !== undefined) parts.push(`NDVI ${inputs.ndvi}`);
+            const parts = this._wildfireInputsText(wildfireRiskData.inputs);
             detailEl.textContent = parts.length
                 ? `Rule-based index from: ${parts.join(', ')}`
                 : '';
@@ -1406,6 +1613,12 @@ class UIManager {
         const scanOverlay = document.getElementById('insight-scan-overlay');
         const legendBox = document.getElementById('ndvi-legend-box');
         const ndviActive = document.getElementById('layer-ndvi')?.checked;
+        const tempHistoryActive = document.getElementById('layer-temp')?.checked;
+        const wildfiresActive = document.getElementById('layer-wildfires')?.checked;
+        const rainfallHistoryActive = document.getElementById('layer-rainfall')?.checked;
+        const weatherActive = document.getElementById('layer-weather')?.checked;
+        const windActive = document.getElementById('layer-wind')?.checked;
+        const openAqActive = document.getElementById('layer-sensors')?.checked;
 
         // 1. Show scanning animation
         if (scanOverlay) scanOverlay.classList.remove('hidden');
@@ -1420,6 +1633,24 @@ class UIManager {
 
             document.getElementById('node-temp').innerText = `${latest.avg_temp_c}°C`;
             document.getElementById('node-precip').innerText = `${latest.total_rainfall_mm}mm`;
+
+            // Temperature band: colors the value + swaps the icon, purely a
+            // visual read of the same real number already shown.
+            const tempBand = this._tempBand(latest.avg_temp_c);
+            const tempValueEl = document.getElementById('node-temp');
+            const tempIconEl = document.getElementById('node-temp-icon');
+            if (tempValueEl) tempValueEl.style.color = tempBand.color;
+            if (tempIconEl) {
+                tempIconEl.className = `fa-solid ${tempBand.icon} data-node-icon`;
+                tempIconEl.style.color = tempBand.color;
+            }
+
+            // Rainfall icon: same mm->icon mapping as the 7-day forecast
+            // strip, so a given rainfall amount always reads the same way.
+            const precipIconEl = document.getElementById('node-precip-icon');
+            if (precipIconEl) {
+                precipIconEl.className = `fa-solid ${this._precipIcon(latest.total_rainfall_mm)} data-node-icon`;
+            }
 
             // Anomaly is a delta from a seasonal baseline, not an absolute
             // temperature — showing it as a bare number ("7.67°C") reads
@@ -1436,6 +1667,26 @@ class UIManager {
                     : 'Near historical average';
             }
 
+            // Zero-centered diverging bar: magnitude scaled against a fixed
+            // +-3C range and clamped at the ends so one outlier can't blow
+            // out the visual scale. Fill grows left (cooler) or right
+            // (warmer) from the center tick.
+            const anomalyFillEl = document.getElementById('anomaly-fill');
+            if (anomalyFillEl) {
+                const ANOMALY_RANGE = 3; // +-3C maps to the full half-width
+                const pct = Math.min(Math.abs(anomaly) / ANOMALY_RANGE, 1) * 50; // max 50% of track from center
+                anomalyFillEl.style.background = anomaly >= 0 ? 'var(--danger)' : 'var(--accent-color)';
+                if (anomaly >= 0) {
+                    anomalyFillEl.style.left = '50%';
+                    anomalyFillEl.style.right = 'auto';
+                    anomalyFillEl.style.width = `${pct}%`;
+                } else {
+                    anomalyFillEl.style.right = '50%';
+                    anomalyFillEl.style.left = 'auto';
+                    anomalyFillEl.style.width = `${pct}%`;
+                }
+            }
+
             // climateData.data_source is "real_openmeteo" or
             // "estimated_fallback" — applies to temp/rainfall/anomaly,
             // all three of which come from the same Open-Meteo call.
@@ -1448,6 +1699,29 @@ class UIManager {
                 document.getElementById('node-co2').innerText = envData.co2_ppm ? `${envData.co2_ppm}` : '--';
                 this._setStatBadge('node-aqi', envData.data_source);
                 this._setStatBadge('node-co2', 'live'); // real NOAA GML reading, see stat-co2 above
+
+                // AQI color + category, reusing the same _aqiColor() scale
+                // already driving the forecast chart bars and globe dots.
+                const aqiValueEl = document.getElementById('node-aqi');
+                const aqiSubEl = document.getElementById('node-aqi-sub');
+                if (aqiValueEl) aqiValueEl.style.color = this._aqiColor(envData.air_quality_index);
+                if (aqiSubEl) aqiSubEl.textContent = this._aqiCategory(envData.air_quality_index);
+
+                // CO2 context bar: fixed 280ppm (pre-industrial) -> 450ppm
+                // rail with a marker at the real reading.
+                const co2MarkerEl = document.getElementById('co2-context-marker');
+                const co2SubEl = document.getElementById('node-co2-sub');
+                if (envData.co2_ppm) {
+                    const CO2_BASELINE = 280, CO2_MAX = 450;
+                    const co2Pct = Math.min(Math.max((envData.co2_ppm - CO2_BASELINE) / (CO2_MAX - CO2_BASELINE), 0), 1) * 100;
+                    if (co2MarkerEl) co2MarkerEl.style.left = `${co2Pct}%`;
+                    if (co2SubEl) {
+                        const pctAbove = Math.round(((envData.co2_ppm - CO2_BASELINE) / CO2_BASELINE) * 100);
+                        co2SubEl.textContent = `+${pctAbove}% vs pre-industrial (${CO2_BASELINE}ppm)`;
+                    }
+                } else if (co2SubEl) {
+                    co2SubEl.textContent = '';
+                }
             }
 
             if (shiData) {
@@ -1459,19 +1733,504 @@ class UIManager {
                 if (shiData.shi >= 80) badge.classList.add('risk-healthy');
                 else if (shiData.shi >= 50) badge.classList.add('risk-moderate');
                 else badge.classList.add('risk-poor');
+
+                // Ring gauge: circumference of r=26 is 2*pi*26 ~= 163.4;
+                // dashoffset 0 = full ring, 163.4 = empty ring.
+                const ringFillEl = document.getElementById('insight-shi-ring-fill');
+                if (ringFillEl) {
+                    const CIRCUMFERENCE = 163.4;
+                    const shiPct = Math.min(Math.max(shiData.shi, 0), 100) / 100;
+                    ringFillEl.style.strokeDashoffset = `${CIRCUMFERENCE * (1 - shiPct)}`;
+                }
             }
 
-            if (this.insightChart) {
-                this.insightChart.data.datasets[0].data = history.map(h => h.avg_temp_c);
-                this.insightChart.update();
-            }
+            // Temperature History section visibility — gated by the
+            // Temperature (Anomaly) toggle, same pattern as vegetation
+            // below. The actual chart data comes from updateTempHistoryChart(),
+            // called separately from globe.js right alongside this
+            // function (mirrors how ndviHistoryData/updateNdviHistoryChart
+            // already work) — this block only controls show/hide.
+            const tempHistorySection = document.getElementById('temp-history-section');
+            if (tempHistorySection) tempHistorySection.classList.toggle('hidden', !tempHistoryActive);
 
-            // 3. Dynamic Legend visibility
-            if (legendBox) {
-                if (ndviActive) legendBox.classList.remove('hidden');
-                else legendBox.classList.add('hidden');
+            // 3. Vegetation section visibility — per explicit request,
+            // this whole section (data-node + legend + History chart) is
+            // now solely gated by the Vegetation (NDVI) toggle, not shown
+            // unconditionally. The old always-on behavior for the
+            // data-node is intentionally gone.
+            const ndviDataNode = document.getElementById('ndvi-data-node');
+            const ndviHistorySection = document.getElementById('ndvi-history-section');
+
+            if (legendBox) legendBox.classList.toggle('hidden', !ndviActive);
+            if (ndviDataNode) ndviDataNode.classList.toggle('hidden', !ndviActive);
+            if (ndviHistorySection) ndviHistorySection.classList.toggle('hidden', !ndviActive);
+
+            // Active Wildfires data-node — same gating pattern, real data
+            // populated separately by updateWildfireInsightNode() (called
+            // alongside this function from globe.js), this block only
+            // controls show/hide.
+            const wildfireDataNode = document.getElementById('wildfire-data-node');
+            if (wildfireDataNode) wildfireDataNode.classList.toggle('hidden', !wildfiresActive);
+
+            // Rainfall History section — same gating pattern, real data
+            // populated separately by updateRainfallHistoryChart() (called
+            // alongside this function from globe.js), this block only
+            // controls show/hide.
+            const rainfallHistorySection = document.getElementById('rainfall-history-section');
+            if (rainfallHistorySection) rainfallHistorySection.classList.toggle('hidden', !rainfallHistoryActive);
+
+            // Weather Conditions data-node — same gating pattern, real
+            // data populated separately by updateWeatherInsightNode()
+            // (called alongside this function from globe.js), this block
+            // only controls show/hide.
+            const weatherDataNode = document.getElementById('weather-data-node');
+            if (weatherDataNode) weatherDataNode.classList.toggle('hidden', !weatherActive);
+
+            // Wind data-node — same gating pattern, real data populated
+            // separately by updateWindInsightNode() (called alongside
+            // this function from globe.js), this block only controls
+            // show/hide.
+            const windDataNode = document.getElementById('wind-data-node');
+            if (windDataNode) windDataNode.classList.toggle('hidden', !windActive);
+
+            // AQI OpenAQ verification sub-line — same gating pattern,
+            // real data populated separately by updateAqiVerificationNode()
+            // (called alongside this function from globe.js), this block
+            // only controls show/hide. Note the AQI value/category above
+            // it (WAQI-sourced) is NEVER gated by this toggle — it always
+            // shows, same as before; only this extra verification line is.
+            const aqiOpenAqSub = document.getElementById('node-aqi-openaq-sub');
+            if (aqiOpenAqSub) aqiOpenAqSub.classList.toggle('hidden', !openAqActive);
+
+            if (ndviActive) {
+                // NDVI legend marker: positions a pointer along the static
+                // gradient bar at the real NDVI value for this location.
+                // Typical real-world NDVI runs ~0 (bare ground) to ~0.9
+                // (dense rainforest); values are clamped so an edge-case
+                // reading can't push the marker off the bar.
+                const ndviMarkerEl = document.getElementById('ndvi-legend-marker');
+                if (ndviMarkerEl && ndviData && ndviData.ndvi !== undefined) {
+                    const NDVI_MIN = 0, NDVI_MAX = 0.9;
+                    const ndviPct = Math.min(Math.max((ndviData.ndvi - NDVI_MIN) / (NDVI_MAX - NDVI_MIN), 0), 1) * 100;
+                    ndviMarkerEl.style.left = `${ndviPct}%`;
+                }
+
+                if (ndviData && ndviData.ndvi !== undefined) {
+                    const ndviBand = this._ndviBand(ndviData.ndvi);
+                    const ndviValueEl = document.getElementById('node-ndvi');
+                    const ndviIconEl = document.getElementById('node-ndvi-icon');
+                    const ndviSubEl2 = document.getElementById('node-ndvi-sub');
+                    const ndviNodeMarkerEl = document.getElementById('node-ndvi-marker');
+
+                    if (ndviValueEl) {
+                        ndviValueEl.innerText = ndviData.ndvi.toFixed(2);
+                        ndviValueEl.style.color = ndviBand.color;
+                    }
+                    if (ndviIconEl) {
+                        ndviIconEl.className = `fa-solid ${ndviBand.icon} data-node-icon`;
+                        ndviIconEl.style.color = ndviBand.color;
+                    }
+                    if (ndviSubEl2) {
+                        const classification = window.globeManager?._ndviClassification(ndviData.ndvi) ?? '';
+                        ndviSubEl2.textContent = `${classification} — NASA MODIS`;
+                    }
+                    if (ndviNodeMarkerEl) {
+                        const NDVI_MIN = 0, NDVI_MAX = 0.9;
+                        const pct = Math.min(Math.max((ndviData.ndvi - NDVI_MIN) / (NDVI_MAX - NDVI_MIN), 0), 1) * 100;
+                        ndviNodeMarkerEl.style.left = `${pct}%`;
+                    }
+                    this._setStatBadge('node-ndvi', ndviData.data_source);
+                }
             }
         }, 1200);
+    }
+
+    // Vegetation History: renders the year -> NDVI chart + trend summary
+    // from get_ndvi_history(). Deliberately separate from updateInsightCard
+    // above (called right alongside it from globe.js) rather than folded
+    // in, so the existing NDVI current-value logic there stays untouched.
+    updateNdviHistoryChart(historyData) {
+        const summaryEl = document.getElementById('ndvi-history-summary');
+        const emptyEl = document.getElementById('ndvi-history-empty');
+        const sectionEl = document.getElementById('ndvi-history-section');
+        if (!this.ndviHistoryChart || !sectionEl) return;
+
+        const years = historyData && Array.isArray(historyData.years) ? historyData.years : [];
+        const validYears = years.filter(y => y.data_source === 'real_modis' && y.ndvi !== null && y.ndvi !== undefined);
+
+        if (years.length === 0 || validYears.length === 0) {
+            // Honest empty state — never draw a chart implying data exists
+            // when every year came back unavailable. Surface the REAL
+            // reason where we have one (historyData.error, from a total
+            // /dates failure) rather than a fixed generic message that
+            // hides whether this is a systemic failure or every individual
+            // year genuinely being cloud-masked.
+            this.ndviHistoryChart.data.labels = [];
+            this.ndviHistoryChart.data.datasets[0].data = [];
+            this.ndviHistoryChart.update();
+            if (summaryEl) { summaryEl.textContent = ''; summaryEl.classList.add('hidden'); }
+            if (emptyEl) {
+                emptyEl.textContent = (historyData && historyData.error)
+                    ? historyData.error
+                    : years.length > 0
+                        ? 'No real MODIS composite found for any reference year at this location (all cloud-masked or no coverage).'
+                        : 'Historical MODIS data unavailable for this location.';
+                emptyEl.classList.remove('hidden');
+            }
+            return;
+        }
+
+        if (emptyEl) emptyEl.classList.add('hidden');
+        if (summaryEl) summaryEl.classList.remove('hidden');
+
+        // Missing years become explicit null data points (never
+        // interpolated/fabricated) — spanGaps: false on the chart (see
+        // its init above) renders these as a visible break in the line.
+        this.ndviHistoryChart.data.labels = years.map(y => String(y.year));
+        this.ndviHistoryChart.data.datasets[0].data = years.map(y =>
+            (y.data_source === 'real_modis' && y.ndvi !== null && y.ndvi !== undefined) ? y.ndvi : null
+        );
+        this.ndviHistoryChart.update();
+
+        if (summaryEl) {
+            if (validYears.length < 2) {
+                summaryEl.textContent = 'Not enough real historical data at this location to determine a trend.';
+            } else {
+                const earliest = validYears[0];
+                const latest = validYears[validYears.length - 1];
+                const pctChange = earliest.ndvi !== 0
+                    ? ((latest.ndvi - earliest.ndvi) / Math.abs(earliest.ndvi)) * 100
+                    : 0;
+
+                // Deliberately NOT "Improving/Declining" — that framing
+                // implies a directional vegetation-cover trend, but this
+                // number compares two seasonal MEANS (each averaged from
+                // real Jul-Aug composites — see get_ndvi_history), which
+                // can shift for reasons other than permanent cover change
+                // (monsoon timing, crop cycle, irrigation). Reporting the
+                // plain % change with its basis stated avoids that
+                // overclaim while still surfacing the real number.
+                const sign = pctChange > 0 ? '+' : '';
+                summaryEl.textContent =
+                    `NDVI change: ${sign}${pctChange.toFixed(1)}% (Jul-Aug seasonal mean, ${earliest.year} to ${latest.year})`;
+            }
+        }
+    }
+
+    // Temperature History: renders the year -> °C chart + trend summary
+    // from get_temperature_history(). Mirrors updateNdviHistoryChart above,
+    // with one deliberate difference: the trend here uses an ABSOLUTE °C
+    // threshold (+/-0.5°C), not percent change. Percent change breaks down
+    // for a value that can cross or sit near zero — e.g. -0.2°C to +0.2°C
+    // is a tiny, unremarkable shift but computes as a nonsensical -200%;
+    // a real anomaly at a cold location could produce similarly misleading
+    // percentages. An absolute °C difference is the honest, stable way to
+    // describe a temperature change, unlike NDVI (always positive, 0-1)
+    // where percent change is meaningful.
+    updateTempHistoryChart(historyData) {
+        const summaryEl = document.getElementById('temp-history-summary');
+        const emptyEl = document.getElementById('temp-history-empty');
+        const sectionEl = document.getElementById('temp-history-section');
+        if (!this.tempHistoryChart || !sectionEl) return;
+
+        const years = historyData && Array.isArray(historyData.years) ? historyData.years : [];
+        const validYears = years.filter(y => y.data_source === 'real_openmeteo' && y.avg_temp_c !== null && y.avg_temp_c !== undefined);
+
+        if (years.length === 0 || validYears.length === 0) {
+            this.tempHistoryChart.data.labels = [];
+            this.tempHistoryChart.data.datasets[0].data = [];
+            this.tempHistoryChart.update();
+            if (summaryEl) { summaryEl.textContent = ''; summaryEl.classList.add('hidden'); }
+            if (emptyEl) {
+                emptyEl.textContent = (historyData && historyData.error)
+                    ? historyData.error
+                    : 'Historical temperature data unavailable for this location.';
+                emptyEl.classList.remove('hidden');
+            }
+            return;
+        }
+
+        if (emptyEl) emptyEl.classList.add('hidden');
+        if (summaryEl) summaryEl.classList.remove('hidden');
+
+        // Missing years become explicit null data points (never
+        // interpolated/fabricated) — spanGaps: false on the chart
+        // renders these as a visible break in the line.
+        this.tempHistoryChart.data.labels = years.map(y => String(y.year));
+        this.tempHistoryChart.data.datasets[0].data = years.map(y =>
+            (y.data_source === 'real_openmeteo' && y.avg_temp_c !== null && y.avg_temp_c !== undefined) ? y.avg_temp_c : null
+        );
+        this.tempHistoryChart.update();
+
+        if (summaryEl) {
+            if (validYears.length < 2) {
+                summaryEl.textContent = 'Not enough real historical data at this location to determine a trend.';
+            } else {
+                const earliest = validYears[0];
+                const latest = validYears[validYears.length - 1];
+                const degChange = latest.avg_temp_c - earliest.avg_temp_c;
+
+                const trendLabel = degChange > 0.5 ? 'Warming' : degChange < -0.5 ? 'Cooling' : 'Stable';
+                const sign = degChange > 0 ? '+' : '';
+                summaryEl.textContent =
+                    `Overall trend: ${trendLabel} (${sign}${degChange.toFixed(1)}°C from ${earliest.year} to ${latest.year})`;
+            }
+        }
+    }
+
+    // Rainfall History: renders the year -> annual-total-mm bar chart
+    // from get_rainfall_history(). Wording is deliberately neutral (no
+    // "Improving/Declining/Wetter/Drier" framing) — same reasoning as
+    // NDVI's "NDVI change" wording: more or less rainfall isn't
+    // inherently good or bad the way it depends entirely on the region
+    // (drought-prone vs. flood-prone), so a plain % change with its
+    // basis stated avoids implying a value judgment the number can't
+    // actually support on its own.
+    updateRainfallHistoryChart(historyData) {
+        const summaryEl = document.getElementById('rainfall-history-summary');
+        const emptyEl = document.getElementById('rainfall-history-empty');
+        const sectionEl = document.getElementById('rainfall-history-section');
+        if (!this.rainfallHistoryChart || !sectionEl) return;
+
+        const years = historyData && Array.isArray(historyData.years) ? historyData.years : [];
+        const validYears = years.filter(y => y.data_source === 'real_openmeteo' && y.annual_mm !== null && y.annual_mm !== undefined);
+
+        if (years.length === 0 || validYears.length === 0) {
+            this.rainfallHistoryChart.data.labels = [];
+            this.rainfallHistoryChart.data.datasets[0].data = [];
+            this.rainfallHistoryChart.update();
+            if (summaryEl) { summaryEl.textContent = ''; summaryEl.classList.add('hidden'); }
+            if (emptyEl) {
+                emptyEl.textContent = (historyData && historyData.error)
+                    ? historyData.error
+                    : 'Historical rainfall data unavailable for this location.';
+                emptyEl.classList.remove('hidden');
+            }
+            return;
+        }
+
+        if (emptyEl) emptyEl.classList.add('hidden');
+        if (summaryEl) summaryEl.classList.remove('hidden');
+
+        this.rainfallHistoryChart.data.labels = years.map(y => String(y.year));
+        this.rainfallHistoryChart.data.datasets[0].data = years.map(y =>
+            (y.data_source === 'real_openmeteo' && y.annual_mm !== null && y.annual_mm !== undefined) ? y.annual_mm : null
+        );
+        this.rainfallHistoryChart.update();
+
+        if (summaryEl) {
+            if (validYears.length < 2) {
+                summaryEl.textContent = 'Not enough real historical data at this location to determine a trend.';
+            } else {
+                const earliest = validYears[0];
+                const latest = validYears[validYears.length - 1];
+                const pctChange = earliest.annual_mm !== 0
+                    ? ((latest.annual_mm - earliest.annual_mm) / Math.abs(earliest.annual_mm)) * 100
+                    : 0;
+                const sign = pctChange > 0 ? '+' : '';
+                summaryEl.textContent =
+                    `Rainfall change: ${sign}${pctChange.toFixed(1)}% (annual total, ${earliest.year} to ${latest.year})`;
+            }
+        }
+    }
+
+    // Active Wildfires: surfaces data that was already being fetched on
+    // every click (wildfireRiskData, via the same rule-based formula the
+    // Prediction tab's stat-risk already shows) plus a new real nearby-
+    // fire count (alertSummaryData, via the existing /alerts/summary
+    // endpoint — already used by the browser extension, just not the
+    // Insight card). Called separately from globe.js, same pattern as
+    // updateNdviHistoryChart/updateTempHistoryChart above.
+    updateWildfireInsightNode(wildfireRiskData, alertSummaryData) {
+        const valueEl = document.getElementById('node-wildfire');
+        const iconEl = document.getElementById('node-wildfire-icon');
+        const inputsSubEl = document.getElementById('node-wildfire-inputs-sub');
+        const nearbySubEl = document.getElementById('node-wildfire-nearby-sub');
+        if (!valueEl) return;
+
+        if (!wildfireRiskData || wildfireRiskData.score === null || wildfireRiskData.score === undefined) {
+            valueEl.textContent = '--';
+            valueEl.style.color = '';
+            if (iconEl) iconEl.style.color = '';
+            if (inputsSubEl) inputsSubEl.textContent = 'Fire danger index unavailable for this location.';
+            if (nearbySubEl) nearbySubEl.textContent = '';
+            return;
+        }
+
+        const color = this._wildfireRiskColor(wildfireRiskData.category);
+        valueEl.textContent = `${wildfireRiskData.score} (${wildfireRiskData.category})`;
+        valueEl.style.color = color;
+        if (iconEl) iconEl.style.color = color;
+        this._setFormulaBadge('node-wildfire', 'Rule-based fire danger index from real inputs — not a trained ML model.');
+
+        if (inputsSubEl) {
+            const parts = this._wildfireInputsText(wildfireRiskData.inputs);
+            inputsSubEl.textContent = parts.length ? `Rule-based index from: ${parts.join(', ')}` : '';
+        }
+
+        // Real nearby fire count from NASA FIRMS (via /alerts/summary) —
+        // only populated when the Active Wildfires toggle was on at
+        // fetch time (see globe.js); an honest "no fires detected" reads
+        // the same as elsewhere in this app (e.g. the globe layer's own
+        // all-clear notice) rather than looking like missing data.
+        if (nearbySubEl) {
+            if (!alertSummaryData || alertSummaryData.data_source?.fires === 'unavailable') {
+                nearbySubEl.textContent = '';
+            } else if (alertSummaryData.fire_count > 0) {
+                const nearest = alertSummaryData.nearest_fire_distance_km;
+                nearbySubEl.textContent = `${alertSummaryData.fire_count} active fire(s) within ${alertSummaryData.radius_km}km` +
+                    (nearest !== null && nearest !== undefined ? ` — nearest ${nearest.toFixed(1)}km (NASA FIRMS)` : ' (NASA FIRMS)');
+            } else {
+                nearbySubEl.textContent = `No active fires detected within ${alertSummaryData.radius_km}km (NASA FIRMS)`;
+            }
+        }
+    }
+
+    // Weather Conditions: real current condition for the exact clicked
+    // location, via the same /api/weather (OpenWeatherMap) endpoint
+    // weather.js's atmospheric sync already relies on — see
+    // loadLocationAnalytics's comment in globe.js for why this is a
+    // separate fetch rather than reusing that camera-driven one.
+    _weatherIcon(main) {
+        const iconByMain = {
+            'Clear': 'fa-sun',
+            'Clouds': 'fa-cloud',
+            'Rain': 'fa-cloud-rain',
+            'Drizzle': 'fa-cloud-rain',
+            'Thunderstorm': 'fa-bolt',
+            'Snow': 'fa-snowflake',
+            'Mist': 'fa-smog',
+            'Fog': 'fa-smog',
+            'Haze': 'fa-smog',
+        };
+        return iconByMain[main] || 'fa-cloud';
+    }
+
+    updateWeatherInsightNode(weatherData) {
+        const valueEl = document.getElementById('node-weather');
+        const iconEl = document.getElementById('node-weather-icon');
+        const subEl = document.getElementById('node-weather-sub');
+        if (!valueEl) return;
+
+        if (!weatherData || !weatherData.description) {
+            valueEl.textContent = '--';
+            if (subEl) subEl.textContent = '';
+            return;
+        }
+
+        // Capitalize each word ("scattered clouds" -> "Scattered Clouds")
+        const description = weatherData.description.replace(/\b\w/g, c => c.toUpperCase());
+        valueEl.textContent = description;
+        if (iconEl) iconEl.className = `fa-solid ${this._weatherIcon(weatherData.main)} data-node-icon`;
+
+        // status: "success" = real OpenWeatherMap reading; "mock" = the
+        // deterministic fallback used when no API key is configured (see
+        // weather.py's _get_mock_weather) — reuses the existing LIVE/EST
+        // badge vocabulary rather than inventing a third label.
+        this._setStatBadge('node-weather', weatherData.status === 'success' ? 'live' : 'mock');
+
+        if (subEl) {
+            const parts = [];
+            if (weatherData.clouds !== null && weatherData.clouds !== undefined) parts.push(`${weatherData.clouds}% cloud cover`);
+            if (weatherData.wind_speed !== null && weatherData.wind_speed !== undefined) parts.push(`${weatherData.wind_speed}km/h wind`);
+            subEl.textContent = parts.join(', ');
+        }
+    }
+
+    // 16-point compass rose lookup — used by updateWindInsightNode below
+    // for a plain-language direction ("NE") alongside the rotated icon.
+    _compassDirection(deg) {
+        const dirs = ['N', 'NNE', 'NE', 'ENE', 'E', 'ESE', 'SE', 'SSE',
+                      'S', 'SSW', 'SW', 'WSW', 'W', 'WNW', 'NW', 'NNW'];
+        const index = Math.round(((deg % 360) + 360) % 360 / 22.5) % 16;
+        return dirs[index];
+    }
+
+    // Wind: real speed + direction for the exact clicked location,
+    // replacing the removed global arrow-glyph layer entirely (see the
+    // note above where toggleWindLayer used to live in globe.js).
+    // Reuses the SAME weatherData already fetched for Weather Conditions
+    // (both come from /api/weather) — no extra API call, each node just
+    // independently gated by its own toggle.
+    updateWindInsightNode(weatherData) {
+        const valueEl = document.getElementById('node-wind');
+        const iconEl = document.getElementById('node-wind-icon');
+        const subEl = document.getElementById('node-wind-sub');
+        if (!valueEl) return;
+
+        if (!weatherData || weatherData.wind_speed === null || weatherData.wind_speed === undefined) {
+            valueEl.textContent = '--';
+            if (subEl) subEl.textContent = '';
+            return;
+        }
+
+        valueEl.textContent = `${weatherData.wind_speed} km/h`;
+        this._setStatBadge('node-wind', weatherData.status === 'success' ? 'live' : 'mock');
+
+        const hasDirection = weatherData.wind_deg !== null && weatherData.wind_deg !== undefined;
+        if (iconEl) {
+            if (hasDirection) {
+                // This icon is a flat 2D element in this side panel, NOT
+                // a marker on the rotating 3D globe — there's no camera-
+                // orientation ambiguity here the way there was for the
+                // removed globe arrows, so a plain CSS rotation is
+                // completely correct on its own, no alignedAxis/ENU-frame
+                // math needed. Rotated to point where the wind is
+                // blowing TOWARD (direction + 180), same convention the
+                // removed globe arrows used, for consistency of meaning.
+                const towardBearing = (weatherData.wind_deg + 180) % 360;
+                iconEl.style.transform = `rotate(${towardBearing}deg)`;
+            } else {
+                iconEl.style.transform = '';
+            }
+        }
+
+        if (subEl) {
+            subEl.textContent = hasDirection
+                ? `From the ${this._compassDirection(weatherData.wind_deg)} (${Math.round(weatherData.wind_deg)}°)`
+                : '';
+        }
+    }
+
+    // AQI OpenAQ verification: a real GENUINELY NEAREST station reading
+    // shown alongside the existing WAQI-sourced AQI value/category above
+    // it (which this never touches or replaces). Uses aqiVerificationData
+    // from the dedicated /aqi-verification endpoint (get_nearest_station_
+    // verification in alerts.py) — deliberately separate from
+    // alertSummaryData/get_alert_summary, which picks the worst reading
+    // within range for the alert system instead of the closest station.
+    // Called separately from globe.js, same pattern as the other Insight
+    // card node updaters.
+    updateAqiVerificationNode(aqiVerificationData) {
+        const subEl = document.getElementById('node-aqi-openaq-sub');
+        if (!subEl) return;
+
+        // data_source is one of: "live" (a validated, fresh reading from
+        // the nearest USABLE station — see get_nearest_station_verification,
+        // which now tries progressively farther candidates rather than
+        // giving up on the single geographically-nearest one),
+        // "missing_api_key", "no_station_in_radius" (zero candidates
+        // existed at all), or "unavailable" with reason="no_valid_
+        // station_in_radius" (candidates existed but none had a usable
+        // reading) or reason="stale" (kept for older cached responses).
+        const source = aqiVerificationData?.data_source;
+
+        if (!aqiVerificationData || source === 'missing_api_key') {
+            subEl.textContent = 'OpenAQ verification unavailable — OPENAQ_API_KEY not set in backend/.env.';
+        } else if (source === 'no_station_in_radius') {
+            subEl.textContent = `No OpenAQ station within ${aqiVerificationData.radius_km}km to verify against.`;
+        } else if (source === 'live' && aqiVerificationData.nearest_aqi !== null && aqiVerificationData.nearest_aqi !== undefined) {
+            const distance = aqiVerificationData.nearest_distance_km;
+            const name = aqiVerificationData.nearest_station_name;
+            const label = name ? `Nearest usable station (${name})` : 'Nearest usable station';
+            subEl.textContent = `${label}${distance !== null && distance !== undefined ? ` (${distance}km away)` : ''}: PM2.5-derived AQI ${aqiVerificationData.nearest_aqi} (OpenAQ)`;
+        } else if (aqiVerificationData.reason === 'no_valid_station_in_radius') {
+            subEl.textContent = `No OpenAQ station within ${aqiVerificationData.radius_km}km currently has a usable PM2.5 reading.`;
+        } else if (aqiVerificationData.reason === 'stale') {
+            subEl.textContent = 'Nearest OpenAQ station\'s latest reading is too old to verify against right now.';
+        } else {
+            subEl.textContent = 'OpenAQ verification unavailable for this location right now.';
+        }
     }
 
     showSensorPopup(id, data, x, y) {

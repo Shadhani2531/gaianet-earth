@@ -361,20 +361,24 @@ body[data-active-tab="prediction"] .tab-item.active {
 /* Subtle scrollbar for panels that can scroll — thin and low-contrast so
    it reads as part of the glass surface, not a jarring default browser bar. */
 .left-panel::-webkit-scrollbar,
-.right-panel::-webkit-scrollbar {
+.right-panel::-webkit-scrollbar,
+.insight-card::-webkit-scrollbar {
     width: 6px;
 }
 .left-panel::-webkit-scrollbar-track,
-.right-panel::-webkit-scrollbar-track {
+.right-panel::-webkit-scrollbar-track,
+.insight-card::-webkit-scrollbar-track {
     background: transparent;
 }
 .left-panel::-webkit-scrollbar-thumb,
-.right-panel::-webkit-scrollbar-thumb {
+.right-panel::-webkit-scrollbar-thumb,
+.insight-card::-webkit-scrollbar-thumb {
     background: rgba(255, 255, 255, 0.15);
     border-radius: 10px;
 }
 .left-panel::-webkit-scrollbar-thumb:hover,
-.right-panel::-webkit-scrollbar-thumb:hover {
+.right-panel::-webkit-scrollbar-thumb:hover,
+.insight-card::-webkit-scrollbar-thumb:hover {
     background: rgba(255, 255, 255, 0.3);
 }
 .left-panel, .right-panel {
@@ -1385,6 +1389,9 @@ body.minimal-mode #minimal-toggle {
     bottom: 100px;
     right: -420px; /* Hidden initially */
     width: 400px;
+    max-height: calc(100vh - 160px);
+    overflow-y: auto;
+    overflow-x: hidden;
     padding: 24px;
     border-radius: 16px;
     z-index: 500;
@@ -1416,9 +1423,47 @@ body.minimal-mode #minimal-toggle {
     border-radius: 12px;
 }
 
+/* Ring gauge wrapper: the SVG ring and the numeric value are stacked via
+   absolute centering rather than side-by-side, so the number reads as
+   "inside" the gauge instead of as a separate stat next to a decoration. */
+.shi-ring-wrap {
+    position: relative;
+    width: 64px;
+    height: 64px;
+    flex-shrink: 0;
+}
+
+.shi-ring {
+    transform: rotate(0deg);
+}
+
+.shi-ring-track {
+    fill: none;
+    stroke: rgba(255, 255, 255, 0.1);
+    stroke-width: 6;
+}
+
+/* Circumference of r=26 is ~163.4 (2*pi*26); dashoffset is set inline by
+   updateInsightCard() from the SHI value, 0 = full ring, 163.4 = empty. */
+.shi-ring-fill {
+    fill: none;
+    stroke: var(--accent-color);
+    stroke-width: 6;
+    stroke-linecap: round;
+    stroke-dasharray: 163.4;
+    stroke-dashoffset: 163.4;
+    transform: rotate(-90deg);
+    transform-origin: 32px 32px;
+    transition: stroke-dashoffset 0.6s ease, stroke 0.3s ease;
+}
+
 .insight-shi-value {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
     font-family: var(--font-mono);
-    font-size: 2.2rem;
+    font-size: 1.3rem;
     font-weight: 700;
     color: var(--accent-color);
     line-height: 1;
@@ -1452,11 +1497,25 @@ body.minimal-mode #minimal-toggle {
 .insight-shi-badge.risk-poor .insight-shi-value,
 .insight-shi-badge.risk-poor .insight-shi-risk { color: var(--danger); }
 
+.insight-shi-badge.risk-healthy .shi-ring-fill { stroke: var(--success); }
+.insight-shi-badge.risk-moderate .shi-ring-fill { stroke: var(--warning-amber); }
+.insight-shi-badge.risk-poor .shi-ring-fill { stroke: var(--danger); }
+
 .insight-grid {
     display: grid;
     grid-template-columns: 1fr 1fr;
     gap: 15px;
     margin-bottom: 25px;
+}
+
+/* Fire Danger Index has more content than the other nodes here — icon +
+   value + FORMULA badge on one line, plus two real-data sentences below
+   — which was overflowing/getting clipped in a half-width column. Full
+   width fixes the actual layout problem instead of papering over it with
+   a horizontal scrollbar, which would be awkward UX stacked on top of
+   the card's existing vertical scroll. */
+#wildfire-data-node {
+    grid-column: 1 / -1;
 }
 
 .data-node {
@@ -1479,6 +1538,110 @@ body.minimal-mode #minimal-toggle {
     font-size: 1.2rem;
     font-weight: 700;
     color: var(--accent-color);
+}
+
+/* Wraps a leading icon + the value span together so the icon can be
+   colored/swapped by band (temperature) or precipitation amount without
+   touching the value text itself (which _setStatBadge and innerText
+   assignments still target directly by id). */
+.value-row {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: wrap;
+}
+
+.data-node-icon {
+    font-size: 0.95rem;
+    color: var(--accent-color);
+}
+
+/* Wind icon rotates to point in the real wind direction (a flat 2D icon
+   in this side panel, not the 3D globe — no camera-orientation ambiguity
+   here, so a plain CSS rotation is completely correct, unlike the
+   removed globe arrows). display:inline-block ensures the rotation
+   transform behaves reliably; the transition makes direction changes
+   between clicks read as a smooth turn rather than a jump cut. */
+#node-wind-icon {
+    display: inline-block;
+    transition: transform 0.3s ease;
+}
+
+/* CO2 context bar: fixed 280ppm (pre-industrial) -> 450ppm rail with a
+   marker at the real reading, so a bare "421 ppm" gets a frame of
+   reference instead of requiring outside knowledge to interpret. */
+.co2-context-bar {
+    position: relative;
+    height: 4px;
+    width: 100%;
+    margin-top: 8px;
+    border-radius: 2px;
+    background: linear-gradient(to right, var(--success) 0%, var(--warning-amber) 55%, var(--danger) 100%);
+}
+
+.co2-context-marker {
+    position: absolute;
+    top: -3px;
+    width: 2px;
+    height: 10px;
+    background: var(--text-primary);
+    left: 0%;
+    transition: left 0.6s ease;
+}
+
+/* Temp anomaly diverging bar: a zero-centered track, filled left (cooler)
+   or right (warmer) from the center tick, scaled against a fixed +-3C
+   range and clamped at the ends so one outlier reading can't blow out
+   the visual scale. Direction/width are set inline by updateInsightCard(). */
+.anomaly-bar {
+    position: relative;
+    height: 6px;
+    width: 100%;
+    margin-top: 8px;
+    border-radius: 3px;
+    background: rgba(255, 255, 255, 0.1);
+}
+
+.anomaly-tick {
+    position: absolute;
+    top: -3px;
+    left: 50%;
+    width: 1px;
+    height: 12px;
+    background: var(--text-secondary);
+    transform: translateX(-50%);
+}
+
+.anomaly-fill {
+    position: absolute;
+    top: 0;
+    height: 6px;
+    border-radius: 3px;
+    background: var(--accent-color);
+    transition: left 0.6s ease, right 0.6s ease, background 0.3s ease;
+}
+
+/* NDVI context bar: same brown->green vegetation-density gradient as the
+   globe-layer legend (.ndvi-legend-bar), but scoped to this single node so
+   the per-location reading has a frame of reference without requiring the
+   Vegetation globe layer to be toggled on. */
+.ndvi-context-bar {
+    position: relative;
+    height: 4px;
+    width: 100%;
+    margin-top: 8px;
+    border-radius: 2px;
+    background: linear-gradient(to right, #a16207 0%, #ca8a04 20%, #84cc16 50%, #15803d 80%, #064e3b 100%);
+}
+
+.ndvi-context-marker {
+    position: absolute;
+    top: -3px;
+    width: 2px;
+    height: 10px;
+    background: var(--text-primary);
+    left: 0%;
+    transition: left 0.6s ease;
 }
 
 /* Custom Scrollbar */
@@ -1819,11 +1982,28 @@ body.minimal-mode .sidebar-tabs {
 }
 
 .ndvi-legend-bar {
+    position: relative;
     height: 8px;
     width: 100%;
     background: linear-gradient(to right, #a16207 0%, #ca8a04 20%, #84cc16 50%, #15803d 80%, #064e3b 100%);
     border-radius: 4px;
     margin-bottom: 5px;
+}
+
+/* Marker showing where the current location's real NDVI value falls
+   along the static gradient reference — the gradient alone never showed
+   this, only the two end labels ("Sparse/Tundra" vs "Rainforest"). */
+.ndvi-legend-marker {
+    position: absolute;
+    top: -3px;
+    width: 0;
+    height: 0;
+    border-left: 5px solid transparent;
+    border-right: 5px solid transparent;
+    border-top: 6px solid var(--text-primary);
+    transform: translateX(-50%);
+    left: 0%;
+    transition: left 0.6s ease;
 }
 
 .ndvi-legend-labels {
@@ -1833,6 +2013,26 @@ body.minimal-mode .sidebar-tabs {
     color: var(--text-secondary);
     text-transform: uppercase;
     letter-spacing: 0.5px;
+}
+
+/* Vegetation History section — reuses the same .label/.data-node-sub/
+   .chart-container tokens already used elsewhere in the insight card,
+   so it doesn't introduce a new visual language. */
+.ndvi-history-section, .temp-history-section, .rainfall-history-section {
+    margin-top: 15px;
+}
+
+.ndvi-history-section .label, .temp-history-section .label, .rainfall-history-section .label {
+    display: block;
+    font-size: 0.7rem;
+    color: var(--text-secondary);
+    text-transform: uppercase;
+    margin-bottom: 6px;
+}
+
+#ndvi-history-summary, #temp-history-summary, #rainfall-history-summary {
+    display: block;
+    margin-top: 4px;
 }
 
 .shimmer {

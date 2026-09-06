@@ -47,7 +47,7 @@ class GlobeManager {
             co2: null,
             pollution: null,
             weather: null,
-            vegetationImagery: null,
+            vegetationImagery: null, // deprecated: kept only so any stale saved layer reference is a no-op; the raster itself was removed
             wind: null,
             wildfires: [],
             sensors: null,
@@ -442,30 +442,84 @@ class GlobeManager {
         document.getElementById('layer-wildfires').addEventListener('change', (e) => {
             AppState.setLayerActive('layer-wildfires', e.target.checked);
             this.toggleWildfires(e.target.checked);
+            // Immediately refresh the Insight card's wildfire node (real
+            // nearby-fire count) rather than waiting for the next click —
+            // same reasoning as the Temperature/Vegetation toggles below.
+            if (AppState.selectedLocation) {
+                this.loadLocationAnalytics(AppState.selectedLocation.lat, AppState.selectedLocation.lon);
+            }
         });
         document.getElementById('layer-temp').addEventListener('change', (e) => {
             AppState.setLayerActive('layer-temp', e.target.checked);
             this.toggleTemperatureAnomalyRaster(e.target.checked);
+            // Immediately refresh the currently-open Insight card (if any)
+            // rather than leaving it showing whatever it looked like at
+            // the time of the last click — flipping this toggle with no
+            // visible effect until the next click was confusing (the
+            // "Turn on..." hint could keep showing even after toggling
+            // ON, simply because nothing re-rendered yet).
+            if (AppState.selectedLocation) {
+                this.loadLocationAnalytics(AppState.selectedLocation.lat, AppState.selectedLocation.lon);
+            }
         });
         document.getElementById('layer-ndvi').addEventListener('change', (e) => {
             AppState.setLayerActive('layer-ndvi', e.target.checked);
-            this.toggleVegetationRaster(e.target.checked);
+            // No globe raster to toggle anymore (removed — see
+            // _ndviClassification's comment). This checkbox now solely
+            // controls whether the Insight card's vegetation section
+            // (value, legend, and History chart) shows — refreshed
+            // immediately below rather than waiting for the next click,
+            // same reasoning as the Temperature toggle above.
+            if (AppState.selectedLocation) {
+                this.loadLocationAnalytics(AppState.selectedLocation.lat, AppState.selectedLocation.lon);
+            }
         });
         document.getElementById('layer-rainfall').addEventListener('change', (e) => {
             AppState.setLayerActive('layer-rainfall', e.target.checked);
-            this.toggleEnvironmentalLayer(e.target.checked, 'rainfall');
+            // No globe raster to toggle anymore (removed — see
+            // toggleEnvironmentalLayer's comment). This checkbox now
+            // solely controls whether the Insight card's Rainfall History
+            // chart shows, refreshed immediately below rather than
+            // waiting for the next click — same pattern as Temperature/
+            // Vegetation/Wildfires.
+            if (AppState.selectedLocation) {
+                this.loadLocationAnalytics(AppState.selectedLocation.lat, AppState.selectedLocation.lon);
+            }
         });
         document.getElementById('layer-weather').addEventListener('change', (e) => {
             AppState.setLayerActive('layer-weather', e.target.checked);
-            this.toggleEnvironmentalLayer(e.target.checked, 'weather');
+            // No globe raster to toggle anymore (the 20°-grid rectangle
+            // renderer that used to handle this was removed entirely).
+            // This does NOT affect weather.js's atmospheric sync
+            // (rain/cloud/clear visuals) — that's a separate, camera-
+            // driven system left untouched. This checkbox now solely
+            // controls whether the Insight card's Weather Conditions
+            // node shows, refreshed immediately rather than waiting for
+            // the next click.
+            if (AppState.selectedLocation) {
+                this.loadLocationAnalytics(AppState.selectedLocation.lat, AppState.selectedLocation.lon);
+            }
         });
         document.getElementById('layer-sensors').addEventListener('change', (e) => {
             AppState.setLayerActive('layer-sensors', e.target.checked);
-            this.toggleSensors(e.target.checked);
+            // No globe markers/clusters anymore (removed — see the note
+            // above toggleWindLayer). This checkbox now solely gates the
+            // real nearest-OpenAQ-station verification line in the
+            // Insight card's AQI node, refreshed immediately rather than
+            // waiting for the next click.
+            if (AppState.selectedLocation) {
+                this.loadLocationAnalytics(AppState.selectedLocation.lat, AppState.selectedLocation.lon);
+            }
         });
         document.getElementById('layer-wind').addEventListener('change', (e) => {
             AppState.setLayerActive('layer-wind', e.target.checked);
-            this.toggleWindLayer(e.target.checked);
+            // No globe arrows anymore (removed — see the note above
+            // where toggleWindLayer used to live). This checkbox now
+            // solely gates the Insight card's Wind node, refreshed
+            // immediately rather than waiting for the next click.
+            if (AppState.selectedLocation) {
+                this.loadLocationAnalytics(AppState.selectedLocation.lat, AppState.selectedLocation.lon);
+            }
         });
 
         // Level of Detail (LOD) based on camera height
@@ -502,18 +556,14 @@ class GlobeManager {
             html += `<p><strong>NDVI Index:</strong> ${data.value.toFixed(3)}</p>`;
         } else if (data.type === 'climate') {
             html += `<p><strong>Temp Anomaly:</strong> ${data.value.toFixed(2)}°C</p>`;
-        } else if (data.type === 'wind') {
-            html += `
-                <p><strong>Speed:</strong> ${data.speed_kmh.toFixed(1)} km/h</p>
-                <p><strong>Direction:</strong> from ${data.direction_deg.toFixed(0)}°</p>
-            `;
         }
         
         // Points are gone from most layers now (billboards/rectangles/
-        // cylinders instead — see toggleWildfires/toggleEnvironmentalLayer/
-        // toggleSensors). Billboard-based entities (wildfires, sensors)
-        // don't have a queryable Cesium color property the way point/
-        // rectangle/cylinder do — their color lives baked into the glyph
+        // cylinders instead — see toggleWildfires, and the remaining
+        // rectangle-grid layers like wind). Billboard-based entities
+        // (wildfires) don't have a queryable Cesium color property the
+        // way point/rectangle/cylinder do — their color lives baked
+        // into the glyph
         // canvas image — so those store their real color directly in
         // _customData.colorHex at creation time, checked first here.
         let popupColor = data.colorHex || '#38bdf8';
@@ -591,20 +641,112 @@ class GlobeManager {
             const shiData = await api.getShi(lat, lon);
             const ndviData = await api.getNdviValue(lat, lon, this.currentDate);
 
+            // Vegetation History is now gated entirely behind the
+            // Vegetation (NDVI) layer toggle — per explicit request, this
+            // toggle no longer paints a globe raster (removed, see
+            // _ndviClassification's comment above) and instead solely
+            // controls whether this per-location history lookup (and the
+            // Insight card's vegetation section) runs at all. Skipping the
+            // fetch when it's off avoids the extra ~6 real ORNL DAAC calls
+            // for people who haven't opted into vegetation analysis.
+            const vegetationLayerOn = document.getElementById('layer-ndvi')?.checked;
+
+            // Temperature History follows the exact same pattern, gated
+            // behind the Temperature (Anomaly) toggle — this used to be
+            // the always-on 6-month sparkline (insightChart); it's now a
+            // real yearly comparison (see updateTempHistoryChart in
+            // ui.js), so gating it the same way as vegetation avoids
+            // firing 6 extra Open-Meteo archive calls for people who
+            // haven't opted into temperature analysis either.
+            const temperatureLayerOn = document.getElementById('layer-temp')?.checked;
+
+            // Active Wildfires: wildfireRiskData itself (the rule-based
+            // fire danger index) is already fetched unconditionally below
+            // — the Prediction tab's stat-risk needs it regardless of
+            // this toggle. Only the REAL nearby-fire-count lookup
+            // (alertSummaryData, via /alerts/summary) is gated here, same
+            // reasoning as vegetation/temperature: no reason to make that
+            // extra real FIRMS-distance-filter call for people who
+            // haven't opted into wildfire analysis for this location.
+            const wildfiresLayerOn = document.getElementById('layer-wildfires')?.checked;
+
+            // Global Air Quality (OpenAQ): repurposed — no more globe
+            // markers/clusters (removed, see the note above
+            // toggleWindLayer). Now solely gates a real NEAREST-station
+            // verification line in the Insight card's AQI node, via a
+            // DEDICATED endpoint (/aqi-verification, get_nearest_station_
+            // verification in alerts.py) — deliberately separate from
+            // alertSummaryData above, which picks the worst reading
+            // within range rather than the genuinely nearest station.
+            // That distinction matters enough (they can disagree by a
+            // lot in cities with many stations) that this needed its own
+            // real lookup, not a relabeled reuse of the alert data.
+            const openAqLayerOn = document.getElementById('layer-sensors')?.checked;
+
+            // Rainfall History follows the same pattern — real annual
+            // precipitation totals (see get_rainfall_history in
+            // climate.py), only fetched when the Rainfall (Precipitation)
+            // toggle is on. This replaces the removed 20°-grid rectangle
+            // globe layer (see toggleEnvironmentalLayer's comment).
+            const rainfallLayerOn = document.getElementById('layer-rainfall')?.checked;
+
+            // Weather Conditions AND Wind: both reuse api.getWeather() —
+            // the exact same /api/weather (OpenWeatherMap) endpoint
+            // weather.js already calls for the atmospheric sync, just
+            // fetched again here tied to the EXACT clicked coordinates
+            // rather than wherever the camera happens to be centered.
+            // weather.js's own fetch is camera-driven (fires on
+            // camera.moveEnd using the globe's center point), which
+            // usually matches the clicked location right after the
+            // fly-to animation but isn't guaranteed to if the user pans
+            // afterward — a dedicated fetch keeps these cards honestly
+            // tied to the location they're actually displaying. Fetched
+            // once, shared by both, if EITHER toggle is on — each node
+            // is independently gated in ui.js by its own toggle though,
+            // so having one doesn't force the other to show.
+            const weatherLayerOn = document.getElementById('layer-weather')?.checked;
+            const windLayerOn = document.getElementById('layer-wind')?.checked;
+
             // Predictive AI (Phase 2): fetched alongside the existing calls
             // above rather than blocking on them — these three hit
             // different upstream services (Open-Meteo, MODIS) than the
             // existing calls, so there's no shared rate limit to worry
             // about by running them concurrently.
-            const [forecastData, aqiForecastData, wildfireRiskData] = await Promise.all([
+            const [forecastData, aqiForecastData, wildfireRiskData, ndviHistoryData, tempHistoryData, alertSummaryData, rainfallHistoryData, weatherConditionsData, aqiVerificationData] = await Promise.all([
                 api.getWeatherForecast(lat, lon, 7),
                 api.getAirQualityForecast(lat, lon, 5),
                 api.getWildfireRisk(lat, lon),
+                // Vegetation History chart — location-scoped only (never
+                // touches the removed global grid); only fetched when the
+                // Vegetation (NDVI) toggle is on.
+                vegetationLayerOn ? api.getNdviHistory(lat, lon) : Promise.resolve(null),
+                // Temperature History chart — only fetched when the
+                // Temperature (Anomaly) toggle is on.
+                temperatureLayerOn ? api.getTemperatureHistory(lat, lon) : Promise.resolve(null),
+                // Real nearby fire count (NASA FIRMS) — only fetched when
+                // the Active Wildfires toggle is on.
+                wildfiresLayerOn ? api.getAlertSummary(lat, lon, 50) : Promise.resolve(null),
+                // Rainfall History (annual totals) — only fetched when
+                // the Rainfall (Precipitation) toggle is on.
+                rainfallLayerOn ? api.getRainfallHistory(lat, lon) : Promise.resolve(null),
+                // Weather Conditions and/or Wind — fetched once if either
+                // toggle is on.
+                (weatherLayerOn || windLayerOn) ? api.getWeather(lat, lon) : Promise.resolve(null),
+                // Nearest-station AQI verification — only fetched when
+                // the Global Air Quality toggle is on.
+                openAqLayerOn ? api.getAqiVerification(lat, lon, 25) : Promise.resolve(null),
             ]);
 
             if (ui) {
                 ui.updateAnalyticsPanel(climateData, envData, shiData, ndviData);
                 ui.updateForecastPanels(forecastData, aqiForecastData, wildfireRiskData);
+                ui.updateNdviHistoryChart(ndviHistoryData);
+                ui.updateTempHistoryChart(tempHistoryData);
+                ui.updateWildfireInsightNode(wildfireRiskData, alertSummaryData);
+                ui.updateRainfallHistoryChart(rainfallHistoryData);
+                ui.updateWeatherInsightNode(weatherConditionsData);
+                ui.updateWindInsightNode(weatherConditionsData);
+                ui.updateAqiVerificationNode(aqiVerificationData);
             }
         } catch (e) {
             console.error("Failed to load analytics:", e);
@@ -813,176 +955,21 @@ class GlobeManager {
         return canvas;
     }
 
-    // Directional arrow for the wind layer. Drawn pointing "up" (screen
-    // north) once per speed tier; per-entity direction is applied via
-    // Cesium's billboard.rotation at render time, not baked into the
-    // canvas, so this stays in the small cache like every other glyph.
-    _createWindArrowCanvas(hexColor, size = 20) {
-        const canvas = document.createElement('canvas');
-        canvas.width = size; canvas.height = size;
-        const ctx = canvas.getContext('2d');
-        const cx = size / 2;
-        ctx.strokeStyle = hexColor;
-        ctx.fillStyle = hexColor;
-        ctx.lineWidth = Math.max(1.5, size / 12);
-        ctx.lineCap = 'round';
-        ctx.beginPath();
-        ctx.moveTo(cx, size * 0.88);
-        ctx.lineTo(cx, size * 0.22);
-        ctx.stroke();
-        ctx.beginPath();
-        ctx.moveTo(cx, size * 0.02);
-        ctx.lineTo(cx - size * 0.24, size * 0.36);
-        ctx.lineTo(cx + size * 0.24, size * 0.36);
-        ctx.closePath();
-        ctx.fill();
-        return canvas;
-    }
+    // Note: _createWindArrowCanvas (the wind-arrow glyph, used only by
+    // the now-removed global arrow layer — see the note above
+    // toggleWindLayer's old location) was removed alongside it.
 
-    async toggleEnvironmentalLayer(visible, type) {
-        if (!visible) {
-            if (this.layers[type]) {
-                this.viewer.dataSources.remove(this.layers[type]);
-                this.layers[type] = null;
-            }
-            return;
-        }
-
-        // All four render as real colored data points from our own
-        // backend — reliable, since we control the data end to end, unlike
-        // the GIBS imagery tile layer NDVI used to rely on (that endpoint's
-        // exact tile matrix conventions proved unreliable even under
-        // direct testing, and is still used separately for Tab 3's
-        // historical imagery comparison, where an actual image layer adds
-        // real value).
-        // Temperature/anomaly used to render here too, as grid-cell
-        // rectangles like the other three — moved to its own dedicated
-        // toggleTemperatureAnomalyRaster() (interpolated raster imagery
-        // layer) because at only 126 real points on a 20° grid with a
-        // latitude-only baseline model, rectangle cells visually banded
-        // by latitude rather than reading as real geographic variation.
-        // NDVI/rainfall/weather don't have that same problem (their
-        // values vary genuinely by both lat and lon, not just lat), so
-        // they're unchanged here.
-        // NDVI used to render here too, alongside rainfall/weather —
-        // moved to its own dedicated toggleVegetationRaster() so it can
-        // honestly represent real MODIS pixels without any spatial
-        // interpolation between them (real MODIS coverage has real
-        // gaps — ocean, persistent cloud — that should read as
-        // transparent, not blended with a neighboring real cell).
-        const fetchers = {
-            rainfall: () => api.getRainfall(),
-            weather: () => api.getWeatherConditions(),
-        };
-        const labels = {
-            rainfall: 'rainfall', weather: 'weather conditions',
-        };
-        const data = await fetchers[type]();
-        const label = labels[type];
-
-        if (!data || !data.features || data.features.length === 0) {
-            // Distinguish "server unreachable" from "server responded but
-            // had nothing to give us" — these have different causes and
-            // different fixes, and used to show the same misleading
-            // message regardless of which one actually happened.
-            const message = api.lastErrorKind === 'network'
-                ? `Could not reach the backend — check that the FastAPI server is running (e.g. via start_project.bat or "uvicorn main:app") and reachable at ${CONFIG.API_BASE_URL}.`
-                : `The backend is running, but couldn't get real ${label} data from its upstream source (Open-Meteo) right now — check the backend server's console log for the actual error, or try again in a minute.`;
-            document.dispatchEvent(new CustomEvent('layerNotice', {
-                detail: { message }
-            }));
-            return;
-        }
-
-        try {
-            const dataSource = await Cesium.GeoJsonDataSource.load(data, { clampToGround: true });
-            const entities = dataSource.entities.values;
-
-            // Half-width of each grid cell, in degrees — matches the
-            // backend's sampling step (climate.py's shared grid
-            // conditions fetch, used by rainfall/weather, steps every
-            // 20°). Rendering a filled cell at this size instead of a
-            // small dot is what actually fixes the "continuous field
-            // shown as scattered dots" problem: these are gridded field
-            // samples, not discrete point events, so they should read as
-            // a continuous shaded surface, not a sparse scatter plot.
-            const halfStepDeg = 10;
-
-            for (let i = 0; i < entities.length; i++) {
-                const entity = entities[i];
-                const val = entity.properties.value ? entity.properties.value.getValue() : 0;
-                const pointSource = entity.properties.data_source ? entity.properties.data_source.getValue() : null;
-
-                let colorHex;
-                if (type === 'rainfall') {
-                    // Dry -> light rain -> heavy rain (mm in the last hour)
-                    if (val <= 0) colorHex = '#78716c'; // Dry
-                    else if (val < 2.5) colorHex = '#7dd3fc'; // Light
-                    else if (val < 10) colorHex = '#0ea5e9'; // Moderate
-                    else colorHex = '#1e3a8a'; // Heavy
-                } else {
-                    // Weather conditions: cloud cover %, clear -> overcast
-                    if (val < 25) colorHex = '#fde047'; // Clear
-                    else if (val < 60) colorHex = '#cbd5e1'; // Partly cloudy
-                    else colorHex = '#64748b'; // Overcast
-                }
-
-                const cartographic = Cesium.Cartographic.fromCartesian(entity.position.getValue());
-                const lat = Cesium.Math.toDegrees(cartographic.latitude);
-                const lon = Cesium.Math.toDegrees(cartographic.longitude);
-
-                // A fallback/estimated sample (currently only possible on
-                // the NDVI grid — see modis_ndvi.py's real_modis vs.
-                // estimated_fallback split) renders at reduced opacity
-                // rather than a dashed outline (Cesium rectangle outlines
-                // don't support dash patterns) — dimmer visually reads as
-                // "less certain," consistent with the LIVE/EST badge
-                // language used in the side panels.
-                const isEstimated = pointSource && pointSource !== 'real_modis' && pointSource !== 'real_openmeteo';
-                const fillAlpha = isEstimated ? 0.22 : 0.62;
-
-                entity.point = undefined;
-                entity.billboard = undefined; // Cesium's GeoJsonDataSource default is a billboard pin, not .point — only nulling .point left every grid cell's default blue marker fully visible
-                // A grid cell centered near the antimeridian (lon close to
-                // ±180°) or a pole (lat close to ±90°) can compute an edge
-                // past the valid range once halfStepDeg is added/
-                // subtracted — Cesium.Rectangle.fromDegrees does not wrap
-                // or clip this itself, it throws a hard DeveloperError
-                // ("Expected west to be greater than or equal to -PI...")
-                // that stops the entire render loop, not just that one
-                // cell. Clamping slightly distorts the handful of cells
-                // right at that edge, which is a far better tradeoff than
-                // crashing the whole tab over it.
-                const west = Math.max(-180, lon - halfStepDeg);
-                const east = Math.min(180, lon + halfStepDeg);
-                const south = Math.max(-90, lat - halfStepDeg);
-                const north = Math.min(90, lat + halfStepDeg);
-                if (west >= east || south >= north) continue; // degenerate cell, skip rather than guess
-
-                entity.rectangle = {
-                    coordinates: Cesium.Rectangle.fromDegrees(west, south, east, north),
-                    material: Cesium.Color.fromCssColorString(colorHex).withAlpha(fillAlpha),
-                    outline: true,
-                    outlineColor: Cesium.Color.fromCssColorString('#94a3b8').withAlpha(0.18),
-                    outlineWidth: 1,
-                    heightReference: Cesium.HeightReference.CLAMP_TO_GROUND,
-                };
-
-                entity._customData = {
-                    type: label,
-                    value: val,
-                    dataSource: pointSource,
-                    lat, lon,
-                };
-            }
-
-            this.viewer.dataSources.add(dataSource);
-            this.layers[type] = dataSource;
-            this.viewer.scene.requestRender();
-        } catch (e) {
-            console.error(`Error loading layer ${type}:`, e);
-        }
-    }
+    // Note: toggleEnvironmentalLayer (the 20°-grid rectangle renderer)
+    // used to live here. It handled rainfall (removed — see
+    // getRainfallHistory's comment) and, later, weather conditions
+    // (removed too, same reasoning: the blocky rectangle grid never
+    // looked right on the globe). Weather Conditions is now shown
+    // per-location in the Insight card instead (exact real condition,
+    // cloud cover %, LIVE/MOCK badge), gated by the same "Weather
+    // Conditions" toggle. This is UNRELATED to weather.js's atmospheric
+    // sync (camera-driven rain/cloud/clear visual effects on the globe
+    // itself) — that system is untouched and keeps working exactly as
+    // before; it was never part of this function.
 
     // Diverging color scale for temperature anomaly, centered at 0°C —
     // dark blue (<=-4) -> light blue (-2) -> near-neutral/transparent (0)
@@ -1186,157 +1173,19 @@ class GlobeManager {
         }
     }
 
-    // Diverging-by-density color scale for NDVI: <0 is handled by the
-    // caller (transparent, never reaches here) — this only maps the real
-    // 0..1 vegetation range: brown (bare) -> yellow-green (low) -> green
-    // (moderate) -> dark green (dense), per the exact NDVI scale
-    // specified. Smooth color blending WITHIN this value-based scale is
-    // not the same thing as spatial interpolation between measurement
-    // locations (which this layer never does) — every pixel in a real
-    // cell gets the exact same value and therefore the exact same color.
-    _ndviToColor(value) {
-        const stops = [
-            { v: 0.0, rgb: [161, 98, 7] },    // brown/tan — sparse/bare
-            { v: 0.2, rgb: [190, 190, 40] },  // yellow — low vegetation
-            { v: 0.4, rgb: [132, 204, 22] },  // light green — low-moderate
-            { v: 0.6, rgb: [34, 139, 34] },   // green — moderate
-            { v: 1.0, rgb: [10, 65, 20] },    // dark green — dense
-        ];
-        const clamped = Math.max(0, Math.min(1, value));
-        let lo = stops[0], hi = stops[stops.length - 1];
-        for (let i = 0; i < stops.length - 1; i++) {
-            if (clamped >= stops[i].v && clamped <= stops[i + 1].v) { lo = stops[i]; hi = stops[i + 1]; break; }
-        }
-        const span = hi.v - lo.v;
-        const t = span === 0 ? 0 : (clamped - lo.v) / span;
-        return lo.rgb.map((c, i) => Math.round(c + (hi.rgb[i] - c) * t));
-    }
-
-    // Real per-location classification, used both for the raster color
-    // (indirectly, via _ndviToColor) and for the Insight panel's text
-    // label — kept as one shared source of truth so the map and the
-    // panel never disagree about what "Moderate" means.
+    // Real per-location classification, used for the Insight panel's text
+    // label. (Previously also shared with the global raster's coloring via
+    // _ndviToColor — that raster and its color-mapping helper were removed
+    // per explicit request: the 10°-grid blocky tiling never looked right
+    // on the globe, and the real per-location value + Vegetation History
+    // chart in the Insight card now cover this feature instead. Nothing
+    // else referenced _ndviToColor, so it was safe to remove outright.)
     _ndviClassification(value) {
         if (value < 0) return 'Water/Snow/Non-vegetated';
         if (value < 0.2) return 'Sparse';
         if (value < 0.4) return 'Low';
         if (value < 0.6) return 'Moderate';
         return 'Dense';
-    }
-
-    async toggleVegetationRaster(visible, factor = 1.0) {
-        if (!visible) {
-            if (this.layers.vegetationImagery) {
-                this.viewer.imageryLayers.remove(this.layers.vegetationImagery);
-                this.layers.vegetationImagery = null;
-            }
-            return;
-        }
-
-        const data = await api.getVegetation();
-        if (!data || !data.features || data.features.length === 0) {
-            const message = api.lastErrorKind === 'network'
-                ? `Could not reach the backend — check that the FastAPI server is running and reachable at ${CONFIG.API_BASE_URL}.`
-                : `The backend is running, but couldn't get real NDVI data from NASA MODIS (via ORNL DAAC) right now — check the backend server's console log for the actual error, or try again in a minute.`;
-            document.dispatchEvent(new CustomEvent('layerNotice', { detail: { message } }));
-            return;
-        }
-
-        // Diagnostic: real vs fallback counts and a sample of actual
-        // values, logged directly rather than guessed at — if real_pct
-        // is low, most of the grid is falling back to the (genuinely
-        // latitude-based) biome estimate model in modis_ndvi.py, which
-        // would explain banding even though the render code itself
-        // filters fallback cells to transparent. If real_pct is high but
-        // banding still shows, the bug is elsewhere and this rules out
-        // the data-coverage theory.
-        const realCount = data.features.filter(f => f.properties.data_source === 'real_modis').length;
-        const fallbackCount = data.features.length - realCount;
-        console.log(`[NDVI diagnostic] ${realCount} real MODIS pixels, ${fallbackCount} fallback (${Math.round(100 * realCount / data.features.length)}% real)`);
-        console.log('[NDVI diagnostic] sample of 10 real points:',
-            data.features.filter(f => f.properties.data_source === 'real_modis').slice(0, 10)
-                .map(f => ({ lat: f.geometry.coordinates[1], lon: f.geometry.coordinates[0], ndvi: f.properties.value })));
-        console.log('[NDVI diagnostic] sample of 10 fallback points:',
-            data.features.filter(f => f.properties.data_source !== 'real_modis').slice(0, 10)
-                .map(f => ({ lat: f.geometry.coordinates[1], lon: f.geometry.coordinates[0], ndvi: f.properties.value })));
-
-        // Real grid is on a known REGULAR step (10°, confirmed against
-        // backend/services/modis_ndvi.py's get_vegetation_geojson), so
-        // "nearest real cell" can be computed directly by rounding to
-        // the grid index — no distance search needed, and critically, no
-        // blending between cells: every pixel inside one real cell gets
-        // that cell's exact real value, nothing else.
-        const STEP = 10;
-        const LAT_START = -60, LON_START = -180;
-        const cellByIndex = {};
-        data.features.forEach(f => {
-            const lon = f.geometry.coordinates[0];
-            const lat = f.geometry.coordinates[1];
-            const latIdx = Math.round((lat - LAT_START) / STEP);
-            const lonIdx = Math.round((lon - LON_START) / STEP);
-            cellByIndex[`${latIdx},${lonIdx}`] = {
-                value: f.properties.value,
-                isReal: f.properties.data_source === 'real_modis',
-            };
-        });
-
-        const west = -180, east = 180, south = -90, north = 90;
-        const width = 360, height = 180;
-        const canvas = document.createElement('canvas');
-        canvas.width = width;
-        canvas.height = height;
-        const ctx = canvas.getContext('2d');
-        const imageData = ctx.createImageData(width, height);
-
-        for (let py = 0; py < height; py++) {
-            const lat = north - py - 0.5;
-            for (let px = 0; px < width; px++) {
-                const lon = west + px + 0.5;
-                const idx = (py * width + px) * 4;
-
-                const latIdx = Math.round((lat - LAT_START) / STEP);
-                const lonIdx = Math.round((lon - LON_START) / STEP);
-                const cell = cellByIndex[`${latIdx},${lonIdx}`];
-
-                // Transparent, not colored, when: outside the real
-                // sampled grid range entirely; the cell is a biome
-                // estimate rather than a real MODIS pixel (ocean/cloud/
-                // timeout fallback — see modis_ndvi.py); or the real
-                // value is negative (water/snow/non-vegetated, per the
-                // specified scale). Never a fallback color of any kind.
-                if (!cell || !cell.isReal || cell.value < 0) {
-                    imageData.data[idx] = 0;
-                    imageData.data[idx + 1] = 0;
-                    imageData.data[idx + 2] = 0;
-                    imageData.data[idx + 3] = 0;
-                    continue;
-                }
-
-                const [r, g, b] = this._ndviToColor(cell.value * factor);
-                imageData.data[idx] = r;
-                imageData.data[idx + 1] = g;
-                imageData.data[idx + 2] = b;
-                imageData.data[idx + 3] = Math.round(0.50 * 255); // flat ~0.50 opacity, within the specified 0.45-0.55 range
-            }
-        }
-        ctx.putImageData(imageData, 0, 0);
-
-        if (this.layers.vegetationImagery) {
-            this.viewer.imageryLayers.remove(this.layers.vegetationImagery);
-            this.layers.vegetationImagery = null;
-        }
-
-        try {
-            const provider = await Cesium.SingleTileImageryProvider.fromUrl(
-                canvas.toDataURL('image/png'),
-                { rectangle: Cesium.Rectangle.fromDegrees(west, south, east, north) }
-            );
-            const layer = new Cesium.ImageryLayer(provider);
-            this.viewer.imageryLayers.add(layer);
-            this.layers.vegetationImagery = layer;
-        } catch (e) {
-            console.error('Failed to build vegetation raster layer:', e);
-        }
     }
 
     listenForScenarios() {
@@ -1394,206 +1243,29 @@ class GlobeManager {
              if (this.layers.temperatureAnomalyImagery) {
                  this.toggleTemperatureAnomalyRaster(true, tempOffset);
              }
-
-             // Intensify NDVI Layer — regenerates the raster with the
-             // simulated multiplicative factor applied to every real
-             // cell's value before coloring (see toggleVegetationRaster's
-             // factor parameter), rather than poking individual rectangle
-             // entities the way this used to work before NDVI moved to a
-             // raster imagery layer. Only re-renders if the layer is
-             // currently on, same "don't spontaneously enable a layer
-             // the user hasn't turned on" rule as temperature.
-             if (this.layers.vegetationImagery) {
-                 const factor = 1.0 + (rainOffset / 100);
-                 this.toggleVegetationRaster(true, factor);
-             }
         });
     }
 
-    async toggleSensors(visible) {
-        if (!visible) {
-            if (this.layers.sensors) {
-                this.viewer.dataSources.remove(this.layers.sensors);
-                this.layers.sensors = null;
-            }
-            // Drop any pulsing entries this layer registered — same
-            // cleanup wildfires does on toggle-off, otherwise repeated
-            // on/off leaks stale billboard references into the shared
-            // pulse loop.
-            this._pulsingBillboards = this._pulsingBillboards.filter((p) => p.layer !== 'sensors');
-            return;
-        }
+    // Note: toggleSensors (the OpenAQ station marker/cluster renderer)
+    // used to live here. Removed per explicit request — the "Global Air
+    // Quality (OpenAQ)" toggle is now repurposed to gate a real nearest-
+    // station verification line in the Insight card instead (see
+    // updateAqiVerificationNode in ui.js), reusing the SAME
+    // alertSummaryData already fetched for Wildfires rather than a
+    // dedicated station-list fetch. No globe markers/clusters render for
+    // this toggle anymore, on purpose.
 
-        // Real per-station readings, resolved server-side — NOT /stations,
-        // which is metadata only. The old code read s.parameters[].lastValue
-        // directly from /stations, but that field never existed in OpenAQ
-        // v3's response shape, so pmValue silently defaulted to 0 for every
-        // single station — which is why every dot rendered green regardless
-        // of real air quality.
-        const stations = await api.getStationsWithReadings();
-        if (!stations || !stations.length) {
-            const message = api.lastErrorKind === 'network'
-                ? `Could not reach the backend — check that the FastAPI server is running and reachable at ${CONFIG.API_BASE_URL}.`
-                : 'No live air-quality readings available — check that OPENAQ_API_KEY is set in backend/.env (get a free key at https://explore.openaq.org), then restart the backend. If it is set, OpenAQ may just be rate-limiting or briefly down — try again shortly.';
-            document.dispatchEvent(new CustomEvent('layerNotice', {
-                detail: { message }
-            }));
-            return;
-        }
-
-        // A real DataSource (not a plain viewer.entities array, which is
-        // what this used to be) — needed because .clustering is only
-        // available on DataSources, and native clustering is what
-        // actually solves whole-earth clutter, the same way it already
-        // does for wildfires, rather than the manual per-distance column
-        // height scaling this layer used to need.
-        const dataSource = new Cesium.CustomDataSource('sensors');
-
-        stations.forEach((s) => {
-            if (!s.coordinates) return;
-
-            const pmValue = s.pm25;
-
-            // Standard EPA PM2.5 AQI color spectrum (6 tiers) rather than a
-            // coarse 3-bucket split — the actual full color/severity scale.
-            let colorHex, tier;
-            if (pmValue <= 12) { colorHex = '#22c55e'; tier = 'good'; }
-            else if (pmValue <= 35.4) { colorHex = '#eab308'; tier = 'moderate'; }
-            else if (pmValue <= 55.4) { colorHex = '#f97316'; tier = 'unhealthy_sensitive'; }
-            else if (pmValue <= 150.4) { colorHex = '#ef4444'; tier = 'unhealthy'; }
-            else if (pmValue <= 250.4) { colorHex = '#a855f7'; tier = 'very_unhealthy'; }
-            else { colorHex = '#7f1d1d'; tier = 'hazardous'; }
-
-            // Single glow-dot billboard glyph, same visual language as
-            // every other point-marker layer (wildfires, reports) —
-            // replaces the old two-entity column+cap pair. Size nudges up
-            // slightly with severity, same "magnitude still reads through
-            // size" principle the wildfire flame glyphs use.
-            const glyphSize = tier === 'hazardous' || tier === 'very_unhealthy' ? 15 : 11;
-            const canvas = this._getGlyphCanvas(`aqi-${colorHex}-${glyphSize}`,
-                () => this._createGlowDotCanvas(colorHex, 4, glyphSize));
-
-            const entity = dataSource.entities.add({
-                position: Cesium.Cartesian3.fromDegrees(s.coordinates.longitude, s.coordinates.latitude),
-                billboard: {
-                    image: canvas,
-                    verticalOrigin: Cesium.VerticalOrigin.CENTER,
-                    heightReference: Cesium.HeightReference.CLAMP_TO_GROUND,
-                    disableDepthTestDistance: Number.POSITIVE_INFINITY,
-                },
-            });
-
-            entity._customData = {
-                type: 'air_quality_station',
-                name: s.name || "Station",
-                lat: s.coordinates.latitude,
-                lon: s.coordinates.longitude,
-                colorHex,
-                details: {
-                    "Country": s.country || "Unknown",
-                    "City": s.city || "Unknown",
-                    "PM2.5": pmValue.toFixed(1) + " µg/m³",
-                    "Status": "Online"
-                }
-            };
-
-            // Only the two worst tiers pulse — same "motion reserved for
-            // things that actually warrant attention" principle as
-            // wildfires, rather than every station breathing at once.
-            if (tier === 'very_unhealthy' || tier === 'hazardous') {
-                this._pulsingBillboards.push({
-                    billboard: entity.billboard,
-                    baseScale: 1,
-                    phase: Math.random() * Math.PI * 2,
-                    layer: 'sensors',
-                });
-            }
-        });
-
-        // Same native clustering setup as wildfires — solves whole-earth
-        // clutter without the manual distance-based column scaling this
-        // layer used to rely on.
-        dataSource.clustering.enabled = true;
-        dataSource.clustering.pixelRange = 40;
-        dataSource.clustering.minimumClusterSize = 2;
-
-        dataSource.clustering.clusterEvent.addEventListener((clusteredEntities, cluster) => {
-            cluster.label.show = true;
-            cluster.label.text = clusteredEntities.length.toString();
-            cluster.billboard.show = true;
-            cluster.billboard.image = this.createClusterCanvas(clusteredEntities.length);
-        });
-
-        this.viewer.dataSources.add(dataSource);
-        this.layers.sensors = dataSource;
-        this.viewer.scene.requestRender();
-    }
-
-    async toggleWindLayer(visible) {
-        if (!visible) {
-            if (this.layers.wind) {
-                this.viewer.dataSources.remove(this.layers.wind);
-                this.layers.wind = null;
-            }
-            return;
-        }
-
-        const data = await api.getWind();
-        if (!data || !data.features || data.features.length === 0) {
-            const message = api.lastErrorKind === 'network'
-                ? `Could not reach the backend — check that the FastAPI server is running and reachable at ${CONFIG.API_BASE_URL}.`
-                : `The backend is running, but couldn't get real wind data from Open-Meteo right now — try again in a minute.`;
-            document.dispatchEvent(new CustomEvent('layerNotice', { detail: { message } }));
-            return;
-        }
-
-        try {
-            const dataSource = await Cesium.GeoJsonDataSource.load(data, { clampToGround: true });
-            const entities = dataSource.entities.values;
-
-            for (let i = 0; i < entities.length; i++) {
-                const entity = entities[i];
-                const speed = entity.properties.speed_kmh ? entity.properties.speed_kmh.getValue() : 0;
-                const direction = entity.properties.direction_deg ? entity.properties.direction_deg.getValue() : 0;
-
-                let colorHex, size;
-                if (speed < 10) { colorHex = '#7dd3fc'; size = 14; }       // Calm
-                else if (speed < 25) { colorHex = '#38bdf8'; size = 18; }  // Moderate
-                else if (speed < 45) { colorHex = '#e8c547'; size = 22; }  // Strong
-                else { colorHex = '#e6432c'; size = 26; }                  // Severe
-
-                const canvas = this._getGlyphCanvas(`wind-${colorHex}-${size}`,
-                    () => this._createWindArrowCanvas(colorHex, size));
-
-                // direction_deg is the direction wind blows FROM (standard
-                // meteorological convention — see climate.py's
-                // get_wind_geojson docstring). Arrows here point where the
-                // wind is blowing TOWARD (direction + 180), which reads
-                // more intuitively as a flow indicator. This is a
-                // simplified north-up rotation, not a true 3D-globe vector
-                // alignment — adequate for the zoom levels this layer is
-                // meant to be viewed at, not claimed to be more precise
-                // than that.
-                const towardBearing = (direction + 180) % 360;
-
-                entity.point = undefined;
-                entity.billboard = {
-                    image: canvas,
-                    rotation: Cesium.Math.toRadians(-towardBearing),
-                    heightReference: Cesium.HeightReference.CLAMP_TO_GROUND,
-                    disableDepthTestDistance: Number.POSITIVE_INFINITY,
-                };
-
-                entity._customData = { type: 'wind', speed_kmh: speed, direction_deg: direction };
-            }
-
-            this.viewer.dataSources.add(dataSource);
-            this.layers.wind = dataSource;
-            this.viewer.scene.requestRender();
-        } catch (e) {
-            console.error("Wind layer load error:", e);
-        }
-    }
+    // Note: toggleWindLayer (the global arrow-glyph renderer) used to
+    // live here. Removed per explicit request — even after fixing its
+    // alignedAxis direction bug, individual arrows scattered across a
+    // ~20°-step global grid were fundamentally too sparse/small to read
+    // as a coherent wind pattern at whole-globe zoom, the same wall every
+    // other coarse global grid layer hit tonight. Wind is now shown
+    // per-location in the Insight card instead (real speed + a correctly
+    // rotated 2D compass arrow — a flat UI icon has no camera-orientation
+    // ambiguity the way a 3D globe marker did, so a plain CSS rotation is
+    // completely correct there), gated by the same "Wind (direction &
+    // speed)" toggle. See updateWindInsightNode in ui.js.
 
     // Interpolates a 0-100 SHI score into a continuous color: red (0) ->
     // yellow (50) -> green (100), rather than 3 hard buckets where e.g. a

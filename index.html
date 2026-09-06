@@ -22,7 +22,7 @@
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
 
     <!-- Custom CSS -->
-    <link rel="stylesheet" href="css/style.css?v=6">
+    <link rel="stylesheet" href="css/style.css?v=10">
 </head>
 <body>
 
@@ -250,9 +250,17 @@
                 <h3 id="insight-title"><i class="fa-solid fa-satellite"></i> Insight</h3>
             </div>
 
-            <!-- SHI badge: this location's Sustainability Health Index -->
+            <!-- SHI badge: this location's Sustainability Health Index, shown
+                 as a ring gauge so the 0-100 score reads at a glance instead
+                 of requiring two lines of text to be read in sequence. -->
             <div class="insight-shi-badge" id="insight-shi-badge">
-                <span class="insight-shi-value" id="insight-shi-value">--</span>
+                <div class="shi-ring-wrap">
+                    <svg class="shi-ring" viewBox="0 0 64 64" width="64" height="64" aria-hidden="true">
+                        <circle class="shi-ring-track" cx="32" cy="32" r="26"></circle>
+                        <circle class="shi-ring-fill" id="insight-shi-ring-fill" cx="32" cy="32" r="26"></circle>
+                    </svg>
+                    <span class="insight-shi-value" id="insight-shi-value">--</span>
+                </div>
                 <div class="insight-shi-meta">
                     <span class="insight-shi-label">Health Index</span>
                     <span class="insight-shi-risk" id="insight-shi-risk">--</span>
@@ -262,38 +270,137 @@
             <div class="insight-grid" id="insight-stats">
                 <div class="data-node">
                     <span class="label">Temperature</span>
-                    <span class="value" id="node-temp">--°C</span>
+                    <span class="value-row">
+                        <i class="fa-solid fa-temperature-half data-node-icon" id="node-temp-icon"></i>
+                        <span class="value" id="node-temp">--°C</span>
+                    </span>
                 </div>
                 <div class="data-node">
                     <span class="label">Air Quality (AQI)</span>
                     <span class="value" id="node-aqi">--</span>
+                    <span class="data-node-sub" id="node-aqi-sub"></span>
+                    <span class="data-node-sub hidden" id="node-aqi-openaq-sub"></span>
                 </div>
                 <div class="data-node">
                     <span class="label">CO₂ (ppm)</span>
                     <span class="value" id="node-co2">--</span>
+                    <div class="co2-context-bar">
+                        <div class="co2-context-marker" id="co2-context-marker"></div>
+                    </div>
+                    <span class="data-node-sub" id="node-co2-sub"></span>
                 </div>
                 <div class="data-node">
                     <span class="label">Rainfall</span>
-                    <span class="value" id="node-precip">--mm</span>
+                    <span class="value-row">
+                        <i class="fa-solid fa-sun data-node-icon" id="node-precip-icon"></i>
+                        <span class="value" id="node-precip">--mm</span>
+                    </span>
                 </div>
                 <div class="data-node">
                     <span class="label">Temp Anomaly</span>
                     <span class="value" id="node-anomaly">--°C</span>
+                    <div class="anomaly-bar">
+                        <div class="anomaly-tick"></div>
+                        <div class="anomaly-fill" id="anomaly-fill"></div>
+                    </div>
                     <span class="data-node-sub" id="node-anomaly-sub"></span>
                 </div>
+                <div class="data-node" id="ndvi-data-node">
+                    <span class="label">Vegetation (NDVI)</span>
+                    <span class="value-row">
+                        <i class="fa-solid fa-seedling data-node-icon" id="node-ndvi-icon"></i>
+                        <span class="value" id="node-ndvi">--</span>
+                    </span>
+                    <div class="ndvi-context-bar">
+                        <div class="ndvi-context-marker" id="node-ndvi-marker"></div>
+                    </div>
+                    <span class="data-node-sub" id="node-ndvi-sub"></span>
+                </div>
+                <div class="data-node" id="wildfire-data-node">
+                    <span class="label">Fire Danger Index</span>
+                    <span class="value-row">
+                        <i class="fa-solid fa-fire data-node-icon" id="node-wildfire-icon"></i>
+                        <span class="value" id="node-wildfire">--</span>
+                    </span>
+                    <span class="data-node-sub" id="node-wildfire-inputs-sub"></span>
+                    <span class="data-node-sub" id="node-wildfire-nearby-sub"></span>
+                </div>
+                <div class="data-node" id="weather-data-node">
+                    <span class="label">Weather Conditions</span>
+                    <span class="value-row">
+                        <i class="fa-solid fa-cloud data-node-icon" id="node-weather-icon"></i>
+                        <span class="value" id="node-weather">--</span>
+                    </span>
+                    <span class="data-node-sub" id="node-weather-sub"></span>
+                </div>
+                <div class="data-node" id="wind-data-node">
+                    <span class="label">Wind</span>
+                    <span class="value-row">
+                        <i class="fa-solid fa-location-arrow data-node-icon" id="node-wind-icon"></i>
+                        <span class="value" id="node-wind">--</span>
+                    </span>
+                    <span class="data-node-sub" id="node-wind-sub"></span>
+                </div>
             </div>
-            <div class="chart-container" style="height: 140px;">
-                <canvas id="insightChart"></canvas>
+
+            <!-- Temperature History: real historical temperature for this
+                 location, matched to the same ~week-of-year window across
+                 fixed reference years (via Open-Meteo's archive/ERA5 data).
+                 Replaces the old always-on 6-month sparkline — now a real
+                 yearly comparison, gated by the Temperature (Anomaly)
+                 toggle, same pattern as Vegetation History below. -->
+            <div class="temp-history-section" id="temp-history-section">
+                <span class="label">Temperature History (°C)</span>
+                <div class="chart-container" style="height: 130px;">
+                    <canvas id="tempHistoryChart"></canvas>
+                </div>
+                <span class="data-node-sub" id="temp-history-summary"></span>
+                <span class="data-node-sub hidden" id="temp-history-empty">Historical temperature data unavailable for this location.</span>
             </div>
-            
+
+            <!-- Rainfall History: real ANNUAL precipitation totals for
+                 this location (Jan 1 - Dec 31 sum, via Open-Meteo's
+                 archive/ERA5 data), for fixed reference years plus the
+                 latest FULLY COMPLETED year — never the current,
+                 still-in-progress year. Deliberately a full-year total
+                 rather than a fixed seasonal window (unlike NDVI's
+                 Jul-Aug comparison): rainfall seasonality varies far too
+                 much by region (monsoon vs. wet-season vs. winter-snow
+                 patterns) for any single fixed window to be meaningful
+                 everywhere. Replaces the removed 20°-grid rectangle
+                 globe layer — gated by the same "Rainfall
+                 (Precipitation)" toggle. -->
+            <div class="rainfall-history-section" id="rainfall-history-section">
+                <span class="label">Rainfall History (Annual Total, mm)</span>
+                <div class="chart-container" style="height: 130px;">
+                    <canvas id="rainfallHistoryChart"></canvas>
+                </div>
+                <span class="data-node-sub" id="rainfall-history-summary"></span>
+                <span class="data-node-sub hidden" id="rainfall-history-empty">Historical rainfall data unavailable for this location.</span>
+            </div>
+
             <!-- NDVI Dynamic Legend -->
             <div id="ndvi-legend-box" class="ndvi-legend hidden">
                 <div class="ndvi-legend-labels">
                     <span>Sparse / Tundra</span>
                     <span>Rainforest</span>
                 </div>
-                <div class="ndvi-legend-bar"></div>
+                <div class="ndvi-legend-bar">
+                    <div class="ndvi-legend-marker" id="ndvi-legend-marker"></div>
+                </div>
                 <div class="text-center x-small text-secondary mt-1">VEGETATION DENSITY SCALE (NDVI)</div>
+            </div>
+
+            <!-- Vegetation History: real historical NDVI for this location,
+                 seasonally matched across fixed reference years. Location-
+                 scoped only — never touches the global 504-point grid. -->
+            <div class="ndvi-history-section" id="ndvi-history-section">
+                <span class="label">Vegetation History (NDVI)</span>
+                <div class="chart-container" style="height: 130px;">
+                    <canvas id="ndviHistoryChart"></canvas>
+                </div>
+                <span class="data-node-sub" id="ndvi-history-summary"></span>
+                <span class="data-node-sub hidden" id="ndvi-history-empty">Historical MODIS data unavailable for this location.</span>
             </div>
         </div>
 
@@ -650,13 +757,13 @@
     <!-- Scripts -->
     <script src="js/config.js"></script>
     <script src="js/state.js"></script>
-    <script src="js/api.js?v=3"></script>
-    <script src="js/ui.js?v=17"></script>
+    <script src="js/api.js?v=12"></script>
+    <script src="js/ui.js?v=34"></script>
     <script src="js/weather.js"></script>
     <script src="js/snapshot-viewer.js"></script>
-    <script src="js/globe.js?v=15"></script>
+    <script src="js/globe.js?v=26"></script>
     <script src="js/gaia.js?v=3"></script>
     <script src="js/report.js"></script>
-    <script src="js/main.js"></script>
+    <script src="js/main.js?v=2"></script>
 </body>
 </html>

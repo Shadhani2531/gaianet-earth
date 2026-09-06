@@ -12,7 +12,7 @@ already do for the main map.
 Reuses the existing real-data clients rather than adding a new upstream
 integration:
   - nasa_firms.get_wildfires_geojson()      (NASA FIRMS, already cached)
-  - openaq_client.get_stations_with_readings() (OpenAQ v3, already cached)
+  - openaq_client.get_stations_near()        (OpenAQ v3, radius-scoped query)
 
 Like the rest of this backend, this never fabricates a reading. If no
 station has real data within the radius, aqi_max is null with an honest
@@ -119,11 +119,13 @@ def get_alert_summary(lat: float, lon: float, radius_km: float = 50.0) -> Dict[s
         logger.warning(f"Alert summary: FIRMS lookup failed: {e}")
 
     # --- Air quality (OpenAQ v3) ---
-    # Uses get_stations_near() — a radius-scoped query — not
-    # get_stations_with_readings(), which sweeps the top 100 stations
-    # GLOBALLY and was the actual cause of /alerts/summary occasionally
-    # taking 10-100+ seconds on a cold cache (100 individual OpenAQ
-    # /latest calls, only a few of which were ever within range).
+    # Uses get_stations_near() — a radius-scoped query — not a global
+    # sweep across ~1000 stations, which was the actual cause of
+    # /alerts/summary occasionally taking 10-100+ seconds on a cold cache
+    # (many individual OpenAQ /latest calls, only a few of which were
+    # ever within range). This is also now the ONLY consumer of OpenAQ
+    # station data in the whole app — the global marker/cluster layer
+    # this reasoning originally applied alongside was removed entirely.
     try:
         stations = openaq_client.get_stations_near(lat, lon, radius_km)
         best_pm25 = None
@@ -150,5 +152,117 @@ def get_alert_summary(lat: float, lon: float, radius_km: float = 50.0) -> Dict[s
             result["data_source"]["air_quality"] = "no_station_in_radius"
     except Exception as e:
         logger.warning(f"Alert summary: OpenAQ lookup failed: {e}")
+
+    return result
+
+
+def get_nearest_station_verification(lat: float, lon: float, radius_km: float = 25.0) -> Dict[str, Any]:
+    """
+    Real nearest-USABLE-OpenAQ-station verification for a single point —
+    used by the Insight card's AQI verification line (see
+    updateAqiVerificationNode in ui.js). Deliberately a SEPARATE function
+    from get_alert_summary() above, which intentionally picks the WORST
+    (highest PM2.5) reading within range — the right behavior for an
+    alert system, since you want to know about the worst nearby condition
+    regardless of exactly where it is. That's not what a verification
+    display should mean, though: "is the real nearest sensor roughly
+    consistent with our estimate" calls for the genuinely closest
+    station, whatever its reading turns out to be — but only if that
+    reading is actually trustworthy.
+
+    get_alert_summary()'s own logic is untouched; this only adds a new,
+    independent lookup alongside it.
+
+    "Nearest" here means nearest station with a VALID, RECENT PM2.5
+    measurement — not just nearest by geography. Candidates within
+    radius_km are tried in ascending distance order; each is validated
+    via get_verified_latest_pm25 (same 24h freshness check, same EPA AQI
+    conversion, both unchanged), and the first one to pass is used. A
+    station that's merely closer but has no working PM2.5 sensor, a stale
+    reading, or an invalid value is skipped (and logged as such) rather
+    than causing the whole lookup to give up. Only returns
+    data_source="unavailable" if EVERY candidate within radius_km fails
+    validation; "no_station_in_radius" is reserved for when there were no
+    geographic candidates at all.
+    """
+    result: Dict[str, Any] = {
+        "lat": lat,
+        "lon": lon,
+        "radius_km": radius_km,
+        "nearest_distance_km": None,
+        "nearest_aqi": None,
+        "nearest_station_name": None,
+        "nearest_raw_pm25": None,
+        "measured_at": None,
+        "age_hours": None,
+        "data_source": "unavailable",
+        "reason": None,
+    }
+
+    if not openaq_client.has_api_key():
+        result["data_source"] = "missing_api_key"
+        return result
+
+    try:
+        stations = openaq_client.get_stations_near(lat, lon, radius_km)
+
+        # Build the full candidate list (geographic distance only, same
+        # bounds as before) and sort nearest-first, rather than picking
+        # a single nearest station up front the way the previous version
+        # did — that meant one bad candidate (no sensor, stale, invalid)
+        # ended the whole lookup instead of trying the next one.
+        candidates = []
+        for station in stations:
+            coords = station.get("coordinates") or {}
+            s_lat, s_lon = coords.get("latitude"), coords.get("longitude")
+            if s_lat is None or s_lon is None:
+                continue
+            distance = _haversine_km(lat, lon, s_lat, s_lon)
+            if distance <= radius_km:
+                candidates.append((distance, station))
+        candidates.sort(key=lambda c: c[0])
+
+        if not candidates:
+            result["data_source"] = "no_station_in_radius"
+            return result
+
+        for distance, station in candidates:
+            verified = openaq_client.get_verified_latest_pm25(station)
+
+            if verified["valid"]:
+                result["nearest_distance_km"] = round(distance, 1)
+                result["nearest_aqi"] = _pm25_to_aqi(verified["value"])
+                result["nearest_station_name"] = station.get("name")
+                result["nearest_raw_pm25"] = verified["value"]
+                result["measured_at"] = verified["measured_at"]
+                result["age_hours"] = verified["age_hours"]
+                result["data_source"] = "live"
+                logger.info(
+                    f"AQI verification: selected station id={station.get('id')} "
+                    f"name={station.get('name')!r} at {round(distance, 1)}km for ({lat},{lon}) — "
+                    f"raw PM2.5={verified['value']} measured_at={verified['measured_at']} "
+                    f"age_hours={verified['age_hours']} -> AQI={result['nearest_aqi']}"
+                )
+                break
+            else:
+                logger.info(
+                    f"AQI verification: skipped candidate id={station.get('id')} "
+                    f"name={station.get('name')!r} at {round(distance, 1)}km for ({lat},{lon}) — "
+                    f"reason={verified['reason']}"
+                )
+
+        if result["data_source"] != "live":
+            # Every candidate within radius existed geographically but
+            # none had a usable measurement — genuinely different from
+            # "no_station_in_radius" (which means zero candidates at
+            # all), so this is reported as unavailable instead.
+            result["data_source"] = "unavailable"
+            result["reason"] = "no_valid_station_in_radius"
+            logger.info(
+                f"AQI verification: all {len(candidates)} candidate(s) within {radius_km}km "
+                f"of ({lat},{lon}) failed validation — no usable PM2.5 measurement nearby"
+            )
+    except Exception as e:
+        logger.warning(f"Nearest-station verification failed for ({lat},{lon}): {e}")
 
     return result

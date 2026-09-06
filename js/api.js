@@ -74,12 +74,12 @@ class ApiService {
         return this.get('/api/weather', { lat, lon });
     }
 
-    async getVegetation() {
-        return this.get('/vegetation');
-    }
-
     async getNdviValue(lat, lon, date = null) {
         return this.get('/ndvi-value', { lat, lon, date });
+    }
+
+    async getNdviHistory(lat, lon) {
+        return this.get('/ndvi-history', { lat, lon });
     }
 
     async getWildfires() {
@@ -88,6 +88,10 @@ class ApiService {
 
     async getClimate(lat, lon) {
         return this.get('/climate', { lat, lon });
+    }
+
+    async getTemperatureHistory(lat, lon) {
+        return this.get('/temperature-history', { lat, lon });
     }
 
     async getPrediction(lat, lon, { forestLossPct = 0, emissionsIncreasePct = 0, isTropical = true } = {}) {
@@ -112,6 +116,14 @@ class ApiService {
         return this.get('/wildfire-risk', { lat, lon });
     }
 
+    async getAlertSummary(lat, lon, radiusKm = 50) {
+        return this.get('/alerts/summary', { lat, lon, radius_km: radiusKm });
+    }
+
+    async getAqiVerification(lat, lon, radiusKm = 25) {
+        return this.get('/aqi-verification', { lat, lon, radius_km: radiusKm });
+    }
+
     // --- One-Click Impact Report (Phase 3) ---
     async getImpactReport(lat, lon, radiusKm = 50) {
         return this.get('/reports/impact', { lat, lon, radius_km: radiusKm });
@@ -121,20 +133,8 @@ class ApiService {
         return this.get('/stations');
     }
 
-    async getRainfall() {
-        return this.get('/rainfall');
-    }
-
-    async getWeatherConditions() {
-        return this.get('/weather-conditions');
-    }
-
-    async getWind() {
-        return this.get('/wind');
-    }
-
-    async getStationsWithReadings() {
-        return this.get('/stations-with-readings');
+    async getRainfallHistory(lat, lon) {
+        return this.get('/rainfall-history', { lat, lon });
     }
 
     async getShiGlobal() {

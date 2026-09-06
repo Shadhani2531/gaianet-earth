@@ -166,9 +166,136 @@ def get_station_latest_pm25(location_id: int, pm25_sensor_id: int | None = None)
         return None
 
 
-_stations_readings_cache = {"data": None, "fetched_at": None}
-STATIONS_READINGS_CACHE_HOURS = 1
-MAX_STATIONS_WITH_READINGS = 100
+# How old a "latest" reading can be before it's no longer trustworthy
+# enough to present as a confident verification number. Real stations
+# commonly report hourly; 24h is generous enough to tolerate a station
+# reporting less often, while still catching one that's actually
+# stuck/offline for days and silently serving a stale last-known value.
+_MAX_PM25_AGE_HOURS = 24.0
+
+
+def get_verified_latest_pm25(station: Dict[str, Any], max_age_hours: float = _MAX_PM25_AGE_HOURS) -> Dict[str, Any]:
+    """
+    Fetches and VALIDATES the single latest real PM2.5 record for one
+    station — the missing step that let a stale/invalid reading (e.g. an
+    exact 0.0 from a dead sensor) get silently presented as a confident
+    "live" verification number with no way to tell the two apart.
+
+    Checks, in order:
+      - the exact matched OpenAQ /latest record (sensorsId, value,
+        datetime) — logged in full, not just the bare value, so a
+        suspicious result can actually be investigated afterward instead
+        of guessed at;
+      - basic physical sanity (a negative PM2.5 reading is impossible);
+      - its real measurement timestamp, converted to an age in hours;
+      - whether that age is within max_age_hours.
+
+    Deliberately does NOT reject an exact 0.0 outright — real air
+    genuinely can read at or near zero (e.g. right after rain scrubs
+    particulates out of the air), so a FRESH 0.0 is treated as valid;
+    only a STALE reading (of any value, including 0.0) is rejected. This
+    also does not touch which station gets selected (see
+    get_nearest_station_verification in alerts.py) — it only decides
+    whether THAT station's reading is trustworthy enough to show at all.
+
+    Returns {"value", "measured_at", "age_hours", "valid", "reason"}.
+    "reason" is one of: "ok", "no_pm25_sensor", "no_matching_sensor_
+    record", "no_value_in_record", "negative_value_invalid", "no_
+    timestamp", "unparseable_timestamp", "stale", "fetch_failed".
+    """
+    result: Dict[str, Any] = {
+        "value": None, "measured_at": None, "age_hours": None,
+        "valid": False, "reason": "unknown",
+    }
+
+    sensor_id = _pm25_sensor_id(station)
+    if sensor_id is None:
+        result["reason"] = "no_pm25_sensor"
+        return result
+
+    location_id = station.get("id")
+    try:
+        resp = requests.get(
+            f"{_OPENAQ_BASE}/locations/{location_id}/latest",
+            headers=_get_headers(),
+            timeout=10,
+        )
+        resp.raise_for_status()
+        results = resp.json().get("results", [])
+        record = next((r for r in results if r.get("sensorsId") == sensor_id), None)
+
+        if record is None:
+            result["reason"] = "no_matching_sensor_record"
+            logger.info(f"AQI verification: station {location_id} has no /latest record for PM2.5 sensor {sensor_id}")
+            return result
+
+        raw_value = record.get("value")
+        raw_datetime = record.get("datetime")
+
+        # OpenAQ v3 commonly nests this as {"utc": "...", "local": "..."}
+        # per docs.openaq.org, but logging the RAW field regardless of
+        # shape means a wrong assumption here still leaves real evidence
+        # to correct from, rather than silently mis-parsing forever.
+        measured_at_str = None
+        if isinstance(raw_datetime, dict):
+            measured_at_str = raw_datetime.get("utc") or raw_datetime.get("local")
+        elif isinstance(raw_datetime, str):
+            measured_at_str = raw_datetime
+
+        logger.info(
+            f"AQI verification: raw /latest record for station {location_id} "
+            f"sensor {sensor_id}: value={raw_value!r} datetime={raw_datetime!r}"
+        )
+
+        if raw_value is None:
+            result["reason"] = "no_value_in_record"
+            return result
+        if raw_value < 0:
+            result["reason"] = "negative_value_invalid"
+            logger.warning(f"AQI verification: station {location_id} returned a physically invalid negative PM2.5 ({raw_value}) — rejected")
+            return result
+
+        result["value"] = raw_value
+        result["measured_at"] = measured_at_str
+
+        if not measured_at_str:
+            # No timestamp at all in the record — can't confirm this is
+            # actually current, so don't present it as verified live data.
+            result["reason"] = "no_timestamp"
+            logger.info(f"AQI verification: station {location_id}'s /latest record had no datetime field — cannot confirm freshness, rejecting")
+            return result
+
+        try:
+            measured_dt = datetime.fromisoformat(measured_at_str.replace("Z", "+00:00"))
+            if measured_dt.tzinfo is None:
+                measured_dt = measured_dt.replace(tzinfo=timezone.utc)
+            age_hours = (datetime.now(timezone.utc) - measured_dt).total_seconds() / 3600
+            result["age_hours"] = round(age_hours, 1)
+        except Exception as e:
+            # Couldn't parse the timestamp at all — can't confirm
+            # freshness, so don't present it as a confident live reading
+            # either. Logged so the actual raw format that broke parsing
+            # is visible for a real fix, not a guess.
+            result["reason"] = "unparseable_timestamp"
+            logger.warning(f"AQI verification: could not parse datetime {measured_at_str!r} for station {location_id}: {e}")
+            return result
+
+        if result["age_hours"] > max_age_hours:
+            result["reason"] = "stale"
+            logger.info(
+                f"AQI verification: station {location_id}'s latest PM2.5 reading is "
+                f"{result['age_hours']}h old (> {max_age_hours}h threshold) — rejecting as stale, "
+                f"not presenting as valid verification"
+            )
+            return result
+
+        result["valid"] = True
+        result["reason"] = "ok"
+        return result
+    except Exception as e:
+        logger.warning(f"AQI verification: detailed PM2.5 fetch failed for station {location_id}: {e}")
+        result["reason"] = "fetch_failed"
+        return result
 
 # Small per-point cache for the radius-scoped lookup below. Keyed on a
 # coarse rounding of (lat, lon, radius_km) so nearby repeat requests (e.g.
@@ -187,18 +314,18 @@ _OPENAQ_MAX_RADIUS_M = 25_000
 
 def get_stations_near(lat: float, lon: float, radius_km: float, limit: int = 25) -> List[Dict[str, Any]]:
     """
-    Targeted alternative to get_stations_with_readings() for callers that
-    only care about one point — e.g. alerts.py's /alerts/summary, used by
-    the browser extension's alarm-driven check.
+    Radius-scoped station lookup for a single point — used by alerts.py's
+    /alerts/summary (both the browser extension's alarm-driven check and,
+    since the global marker/cluster layer was removed, the Insight card's
+    AQI verification line too — see updateAqiVerificationNode in ui.js).
 
-    get_stations_with_readings() was built for the main map: fetch up to
-    100 stations GLOBALLY, enrich all of them, cache for an hour. Using
-    that for a single-point radius query meant paying for ~100 individual
-    OpenAQ /latest calls just to keep the handful actually within range —
-    slow (10+ concurrent-batched round trips) and wasteful of OpenAQ's
-    rate limit on stations the caller immediately discards. This function
-    asks OpenAQ for stations near the point directly, so enrichment only
-    ever touches the few stations that matter for this call.
+    This is now the ONLY consumer of real-time OpenAQ station data in the
+    app. It intentionally only enriches the handful of stations actually
+    within range, rather than a global sweep — the app previously also
+    had a get_stations_with_readings() that fetched/enriched up to 100
+    stations globally for a map layer; that layer was removed entirely,
+    and the function along with it, since this radius-scoped query is
+    exactly what every remaining real consumer actually needed.
     """
     if not _has_api_key():
         return []
@@ -235,9 +362,8 @@ def get_stations_near(lat: float, lon: float, radius_km: float, limit: int = 25)
         _near_cache[cache_key] = {"data": [], "fetched_at": now}
         return []
 
-    # Only a handful of stations at this point (radius-scoped, not the
-    # global top-100) — safe to enrich them all concurrently without the
-    # 10-wave bottleneck get_stations_with_readings() has at 100 stations.
+    # Only a handful of stations at this point (radius-scoped) — safe to
+    # enrich them all concurrently.
     enriched = []
     with ThreadPoolExecutor(max_workers=min(10, len(stations))) as executor:
         future_to_station = {
@@ -259,80 +385,20 @@ def get_stations_near(lat: float, lon: float, radius_km: float, limit: int = 25)
                 "country": (station.get("country") or {}).get("name"),
                 "city": station.get("locality"),
                 "pm25": reading,
+                # Carried forward so a later per-station re-validation
+                # (get_verified_latest_pm25) can find the PM2.5 sensor —
+                # without this, _pm25_sensor_id() always returns None on
+                # this stripped-down dict, which looked exactly like "this
+                # station has no PM2.5 sensor" when it actually just meant
+                # "this field never made it into the enriched output."
+                "sensors": station.get("sensors", []),
             })
 
     _near_cache[cache_key] = {"data": enriched, "fetched_at": now}
     return enriched
 
 
-def get_stations_with_readings(limit: int = MAX_STATIONS_WITH_READINGS) -> List[Dict[str, Any]]:
-    """
-    Real stations WITH each one's actual latest PM2.5 reading resolved
-    server-side. Fixes a real bug: the frontend used to read
-    station.parameters[].lastValue directly from the plain /locations
-    response, but OpenAQ v3's /locations list does NOT include live
-    readings inline (see get_country_aqi_aggregate's docstring below) — so
-    that value was always undefined, every station's reading silently
-    defaulted to 0, and every dot rendered as "green" regardless of real
-    air quality.
-
-    Bounded to `limit` stations and cached for an hour — resolving a
-    reading requires a separate real /locations/{id}/latest call per
-    station, and OpenAQ v3 rate-limits aggressively, so querying all
-    ~1000+ available stations on every request isn't practical. Stations
-    whose real reading can't be resolved are OMITTED entirely, never
-    defaulted to a fabricated "safe" value.
-    """
-    now = datetime.now(timezone.utc)
-    if (_stations_readings_cache["data"] is not None and _stations_readings_cache["fetched_at"]
-            and (now - _stations_readings_cache["fetched_at"]) < timedelta(hours=STATIONS_READINGS_CACHE_HOURS)):
-        return _stations_readings_cache["data"]
-
-    stations = get_stations(limit=1000)
-    if not stations:
-        return []
-
-    has_pm25 = [
-        s for s in stations
-        if any(p.get("parameter", {}).get("id") == 2 for p in s.get("sensors", []))
-    ][:limit]
-
-    # Resolve readings concurrently instead of one station at a time — with
-    # up to 100 stations and a 10s-per-call timeout, sequential fetching had
-    # a worst case of ~1000 seconds before returning anything, which looked
-    # identical to "broken" from the frontend. Kept to a modest 10 workers
-    # (not 30, like the vegetation grid) since OpenAQ rate-limits more
-    # aggressively than ORNL DAAC.
-    enriched = []
-    with ThreadPoolExecutor(max_workers=10) as executor:
-        future_to_station = {
-            executor.submit(get_station_latest_pm25, station["id"], _pm25_sensor_id(station)): station
-            for station in has_pm25
-        }
-        for future in as_completed(future_to_station):
-            station = future_to_station[future]
-            try:
-                reading = future.result()
-            except Exception as e:
-                logger.warning(f"PM2.5 fetch failed for station {station['id']}: {e}")
-                continue
-            if reading is None:
-                continue  # Omit rather than guess.
-            enriched.append({
-                "id": station["id"],
-                "name": station.get("name") or station.get("location"),
-                "coordinates": station.get("coordinates"),
-                "country": (station.get("country") or {}).get("name"),
-                "city": station.get("locality"),
-                "pm25": reading,
-            })
-
-    _stations_readings_cache["data"] = enriched
-    _stations_readings_cache["fetched_at"] = now
-    return enriched
-
-
-def get_country_aqi_aggregate(max_stations_to_query: int = 200) -> Dict[str, Dict[str, Any]]:
+def get_country_aqi_aggregate(max_stations_to_query: int = 80) -> Dict[str, Dict[str, Any]]:
     """
     Real per-country average PM2.5, aggregated from actual OpenAQ v3 station
     readings. Returns {country_code: {"avg_pm25": float, "station_count": int,
@@ -392,10 +458,16 @@ def get_country_aqi_aggregate(max_stations_to_query: int = 200) -> Dict[str, Dic
     for station, code in sampled:
         country_names[code] = (station.get("country") or {}).get("name", code)
 
-    # Resolve readings concurrently — this loop making up to 200 sequential
-    # blocking calls (worst case ~2000s) is very likely why the Global
-    # Health Index tab got stuck on "Loading real station data..." with no
-    # visible progress or failure, rather than genuinely being broken.
+    # Resolve readings concurrently — this loop making up to 80 sequential
+    # blocking calls (worst case ~800s at max_workers=10) was very likely
+    # why the Global Health Index tab got stuck on "Loading real station
+    # data..." with no visible progress or failure, rather than genuinely
+    # being broken — worse still at the previous default of 200 stations.
+    # Reduced 200 -> 80 for a meaningfully faster worst case, and the
+    # /shi-global route in main.py now also persists results to disk and
+    # serves stale data immediately while refreshing in the background,
+    # so even this reduced worst-case duration is no longer something a
+    # user has to sit through synchronously after every backend restart.
     by_country_values = defaultdict(list)
     with ThreadPoolExecutor(max_workers=10) as executor:
         future_to_pair = {

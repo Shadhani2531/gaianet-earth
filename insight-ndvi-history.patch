@@ -1,0 +1,729 @@
+--- a/backend/services/modis_ndvi.py
++++ b/backend/services/modis_ndvi.py
+@@ -25,7 +25,125 @@
+ # resolution. NDVI values are returned scaled by 10000 per the product's
+ # documented scale factor (raw 4517 -> NDVI 0.4517).
+ _ORNL_MODIS_BASE = "https://modis.ornl.gov/rst/api/v1/MOD13Q1/subset"
+-_ndvi_point_cache: Dict[str, Any] = {}  # key: "lat,lon,date" -> {value, fetched_at}
++_ORNL_MODIS_DATES_BASE = "https://modis.ornl.gov/rst/api/v1/MOD13Q1/dates"
++_ndvi_point_cache: Dict[str, Any] = {}  # key: "lat,lon,modis_date" -> {value, fetched_at}
++
++# --- Safety gate history (2026-09 dates-endpoint fix) -----------------------
++# Day-offset guessing (previously: try now-60d, now-76d, ...) was removed
++# entirely — it kept going stale as ORNL DAAC's real publishing lag
++# drifted. Replaced by actually asking ORNL DAAC which composite dates
++# exist for a given point (the /dates endpoint) and using the exact
++# returned modis_date string, no arithmetic guessing involved. This was
++# gated off (VEGETATION_GRID_ENABLED = False) until a single real_modis
++# result was confirmed end to end via get_ndvi_at_location() — confirmed
++# 2026-09-05 (log showed /dates -> 200, resolved A2026209, /subset -> 200,
++# Insight card showed LIVE). Now enabled for the full 504-point grid.
++#
++# Watch for: the grid now makes TWO real ORNL DAAC calls per point instead
++# of one (/dates then /subset) — roughly double the previous request
++# volume against the same server, still via ThreadPoolExecutor(30). If
++# real_pct in the vegetation grid's log line drops or 400/429s reappear
++# under that load, that's a rate-limiting issue to address next (e.g.
++# fewer concurrent workers, or caching /dates more aggressively across
++# nearby grid cells), not a sign this fix itself is wrong.
++VEGETATION_GRID_ENABLED = True
++
++# --- Available-dates lookup --------------------------------------------------
++# key: "lat,lon" (rounded) -> {"dates": [(calendar_date: datetime, modis_date: str), ...], "fetched_at": datetime}
++_dates_cache: Dict[str, Any] = {}
++_DATES_CACHE_HOURS = 24
++
++
++def _get_available_dates(lat: float, lon: float) -> Optional[list]:
++    """
++    Returns the cached/fresh list of ALL published (calendar_date, modis_date)
++    tuples for this (lat, lon) from ORNL DAAC's /MOD13Q1/dates endpoint — not
++    filtered to any date range, since the endpoint itself returns the full
++    history for a point in one call. Shared by both the "latest available"
++    lookup (used by the live single-location value) and the historical-years
++    lookup, so a location's dates are only ever fetched once per cache
++    window, not once per use case. Returns None if the request fails.
++    """
++    cache_key = f"{round(lat, 2)},{round(lon, 2)}"
++    now = datetime.now(timezone.utc)
++    cached = _dates_cache.get(cache_key)
++
++    if cached and (now - cached["fetched_at"]).total_seconds() < _DATES_CACHE_HOURS * 3600:
++        return cached["dates"]
++
++    try:
++        resp = requests.get(
++            _ORNL_MODIS_DATES_BASE,
++            params={"latitude": lat, "longitude": lon},
++            headers={"Accept": "application/json"},
++            timeout=10,
++        )
++        logger.info(f"NDVI: /dates request for ({lat},{lon}) -> HTTP {resp.status_code}")
++        resp.raise_for_status()
++        payload = resp.json()
++        raw_dates = payload.get("dates", [])
++
++        parsed_dates = []
++        for entry in raw_dates:
++            try:
++                cal_date = datetime.strptime(entry["calendar_date"], "%Y-%m-%d").replace(tzinfo=timezone.utc)
++                parsed_dates.append((cal_date, entry["modis_date"]))
++            except Exception:
++                continue  # skip any malformed entry rather than fail the whole lookup
++
++        _dates_cache[cache_key] = {"dates": parsed_dates, "fetched_at": now}
++        return parsed_dates
++    except Exception as e:
++        logger.warning(f"NDVI: /dates request failed for ({lat},{lon}): {e}")
++        return None
++
++
++def _get_latest_available_modis_date(lat: float, lon: float, before_dt: datetime) -> Optional[str]:
++    """
++    Returns the exact modis_date string (e.g. "A2026072") for the latest
++    composite on or before before_dt — never a date computed/guessed
++    locally. Returns None if the dates lookup fails or no published date
++    exists on or before before_dt. (Unchanged behavior/logging from the
++    original version — now just backed by the shared _get_available_dates.)
++    """
++    parsed_dates = _get_available_dates(lat, lon)
++    if parsed_dates is None:
++        return None
++
++    candidates = [(cal_date, modis_date) for (cal_date, modis_date) in parsed_dates if cal_date <= before_dt]
++    if not candidates:
++        logger.warning(f"NDVI: /dates for ({lat},{lon}) returned no composite on or before {before_dt.date()}")
++        return None
++
++    candidates.sort(key=lambda c: c[0])
++    latest_cal_date, latest_modis_date = candidates[-1]
++    logger.info(f"NDVI: latest available MOD13Q1 date for ({lat},{lon}) on/before {before_dt.date()} is {latest_modis_date} ({latest_cal_date.date()})")
++    return latest_modis_date
++
++
++def _nearest_available_modis_date(lat: float, lon: float, target_dt: datetime, max_days_diff: int = 24) -> Optional[tuple]:
++    """
++    Returns the (calendar_date, modis_date) of the published composite
++    closest to target_dt (before OR after — unlike _get_latest_available_
++    modis_date, which is deliberately "on or before" only), as long as it's
++    within max_days_diff days. Used for historical seasonal matching: we
++    want the closest real composite to the same time of year in a past
++    year, not necessarily one strictly before it. 24 days (~1.5 compositing
++    cycles) keeps a match from landing in a different season if data near
++    the target is sparse. Returns None if no match is within tolerance.
++    """
++    parsed_dates = _get_available_dates(lat, lon)
++    if not parsed_dates:
++        return None
++
++    best = None
++    best_diff = None
++    for cal_date, modis_date in parsed_dates:
++        diff = abs((cal_date - target_dt).days)
++        if diff <= max_days_diff and (best_diff is None or diff < best_diff):
++            best = (cal_date, modis_date)
++            best_diff = diff
++    return best
+ 
+ 
+ def _to_modis_date(dt: datetime) -> str:
+@@ -33,23 +151,21 @@
+     return f"A{dt.year}{dt.timetuple().tm_yday:03d}"
+ 
+ 
+-def _fetch_real_modis_ndvi(lat: float, lon: float, dt: datetime) -> Optional[float]:
++def _fetch_subset_ndvi_value(lat: float, lon: float, modis_date: str) -> Optional[float]:
+     """
+-    Query the real ORNL DAAC MODIS subset service for the NDVI value
+-    closest to (lat, lon, dt). Returns a float in [-1, 1], or None if the
+-    service is unreachable or has no valid pixel for this point/date
+-    (e.g. permanent cloud cover, ocean, or a date outside MODIS coverage
+-    which begins February 2000).
++    Low-level: one real ORNL DAAC /MOD13Q1/subset call for an EXACT,
++    already-resolved modis_date string, parsed to a single NDVI float.
++    Shared by both the live single-location lookup (_fetch_real_modis_ndvi)
++    and the historical-years lookup (get_ndvi_history), so both use the
++    identical request/parse/cache path — no duplicated logic to drift out
++    of sync. Returns None on request failure or no valid pixel for this
++    date/location (e.g. persistent cloud cover).
+     """
+-    cache_key = f"{round(lat, 2)},{round(lon, 2)},{dt.strftime('%Y-%m')}"
++    cache_key = f"{round(lat, 2)},{round(lon, 2)},{modis_date}"
+     cached = _ndvi_point_cache.get(cache_key)
+     if cached and (datetime.now(timezone.utc) - cached["fetched_at"]) < timedelta(hours=24):
+         return cached["value"]
+ 
+-    if dt < datetime(2000, 2, 24, tzinfo=timezone.utc):
+-        return None  # before MODIS Terra coverage begins
+-
+-    modis_date = _to_modis_date(dt)
+     try:
+         resp = requests.get(
+             _ORNL_MODIS_BASE,
+@@ -64,6 +180,7 @@
+             headers={"Accept": "application/json"},
+             timeout=10,
+         )
++        logger.info(f"NDVI: /subset request for ({lat},{lon}) date={modis_date} -> HTTP {resp.status_code}")
+         resp.raise_for_status()
+         data = resp.json()
+ 
+@@ -83,43 +200,51 @@
+                 return ndvi_value
+         return None
+     except Exception as e:
+-        logger.warning(f"ORNL DAAC MODIS NDVI fetch failed for ({lat},{lon},{modis_date}): {e}")
++        logger.warning(f"NDVI: /subset request failed for ({lat},{lon},{modis_date}): {e}")
+         return None
+ 
+ 
++def _fetch_real_modis_ndvi(lat: float, lon: float, requested_dt: datetime) -> Optional[float]:
++    """
++    Query the real ORNL DAAC MODIS subset service for the NDVI value at
++    (lat, lon), for the latest actually-published composite on or before
++    requested_dt (resolved via /MOD13Q1/dates — never a locally-guessed
++    date). Returns a float in [-1, 1], or None if no published date is
++    found, or the subset request itself fails/has no valid pixel (e.g.
++    permanent cloud cover, ocean). (Unchanged behavior/logging from the
++    original version — now just a thin wrapper over the shared
++    _fetch_subset_ndvi_value.)
++    """
++    if requested_dt < datetime(2000, 2, 24, tzinfo=timezone.utc):
++        return None  # before MODIS Terra coverage begins
++
++    modis_date = _get_latest_available_modis_date(lat, lon, requested_dt)
++    if modis_date is None:
++        return None  # /dates lookup failed, or nothing published yet for this point
++
++    return _fetch_subset_ndvi_value(lat, lon, modis_date)
++
++
+ def get_ndvi_at_location(lat: float, lon: float, date_str: str = None) -> Dict[str, Any]:
+     """
+-    Real NDVI value for a specific point and date, from NASA MODIS
+-    (via ORNL DAAC's MOD13Q1 subset service). Falls back to a clearly
+-    labeled biome/season ESTIMATE only if the real service is unreachable
+-    or returns no data for this point (e.g. persistent cloud cover) —
+-    the fallback is never presented as real satellite data.
++    Real NDVI value for a specific point, for the latest MOD13Q1 composite
++    actually published on or before the requested date (from NASA MODIS via
++    ORNL DAAC — see _get_latest_available_modis_date). Falls back to a
++    clearly labeled biome/season ESTIMATE only if the real service is
++    unreachable or has no published data for this point — the fallback is
++    never presented as real satellite data.
+     """
+     if date_str:
+         try:
+-            dt = datetime.fromisoformat(date_str.replace('Z', '+00:00'))
+-            if dt.tzinfo is None:
+-                dt = dt.replace(tzinfo=timezone.utc)
++            requested_dt = datetime.fromisoformat(date_str.replace('Z', '+00:00'))
++            if requested_dt.tzinfo is None:
++                requested_dt = requested_dt.replace(tzinfo=timezone.utc)
+         except Exception:
+-            dt = datetime.now(timezone.utc) - timedelta(days=60)
++            requested_dt = datetime.now(timezone.utc)
+     else:
+-        # BUG FIX: this used to default to datetime.now(timezone.utc) —
+-        # literally today. MOD13Q1 is a 16-day COMPOSITE product; ORNL
+-        # DAAC hasn't generated/published a composite covering "today"
+-        # yet, and confirmed via a real observed error, querying for it
+-        # returns a hard 400 Bad Request every single time (not a
+-        # rate limit, not a network issue — the request itself is
+-        # rejected as invalid). This is the exact same class of
+-        # processing-lag problem climate.py already accounts for with
+-        # Open-Meteo's archive (5-day lag there) — modis_ndvi.py just
+-        # never had the equivalent fix. 60 days is a generous buffer
+-        # (roughly 4 full 16-day compositing cycles) chosen to reliably
+-        # land on an already-published period even if real processing
+-        # latency varies — if requests still 400 at this offset, that's
+-        # the next thing to check, not a smaller number.
+-        dt = datetime.now(timezone.utc) - timedelta(days=60)
++        requested_dt = datetime.now(timezone.utc)
+ 
+-    real_ndvi = _fetch_real_modis_ndvi(lat, lon, dt)
++    real_ndvi = _fetch_real_modis_ndvi(lat, lon, requested_dt)
+ 
+     if real_ndvi is not None:
+         ndvi = real_ndvi
+@@ -127,7 +252,7 @@
+         data_source = "real_modis"
+     else:
+         # Honest fallback: biome/season estimate, clearly labeled as such.
+-        ndvi = _estimate_ndvi_by_biome(lat, lon, dt)
++        ndvi = _estimate_ndvi_by_biome(lat, lon, requested_dt)
+         source = "Estimated (biome/season model — real MODIS data unavailable for this point/date)"
+         data_source = "estimated_fallback"
+ 
+@@ -143,12 +268,116 @@
+         "ndvi": round(ndvi, 3),
+         "health": health,
+         "wildfire_risk": risk,
+-        "timestamp": dt.isoformat(),
++        "timestamp": requested_dt.isoformat(),
+         "source": source,
+         "data_source": data_source,
+     }
+ 
+ 
++# Historical years never change once a real MOD13Q1 composite is published
++# for them — only the "current/latest available year" entry could ever get
++# a newer composite later. 30 days is generous and safe either way: it
++# means repeated clicks on the same location don't re-hit ORNL DAAC for
++# weeks, and even the "latest year" entry only goes stale for at most a
++# month, well inside one 16-day compositing cycle's worth of slack.
++_history_cache: Dict[str, Any] = {}
++_HISTORY_CACHE_HOURS = 24 * 30
++
++# Fixed reference years for the Vegetation History chart. 2001 is the
++# earliest included since MOD13Q1 (Terra) coverage only begins Feb 2000 —
++# an earlier year like 1990 would have zero real MODIS data to show,
++# which is why it's deliberately excluded rather than left to silently
++# return "unavailable" for every location.
++_HISTORY_REFERENCE_YEARS = [2001, 2005, 2010, 2015, 2020]
++
++
++def get_ndvi_history(lat: float, lon: float) -> Dict[str, Any]:
++    """
++    Real historical NDVI at (lat, lon) for _HISTORY_REFERENCE_YEARS plus
++    whichever year the current "latest available" composite falls in, all
++    matched to the SAME approximate day-of-year (via
++    _nearest_available_modis_date) so values are seasonally comparable
++    across years rather than accidentally comparing, say, a dry-season
++    reading to a monsoon one. Every value is either a real MOD13Q1
++    composite (via the same _fetch_subset_ndvi_value the live single-
++    location lookup uses) or explicitly marked "unavailable" — never
++    fabricated, estimated, or interpolated. Cached per location; see
++    _HISTORY_CACHE_HOURS.
++
++    This does NOT touch the global 504-point vegetation grid or increase
++    its resolution — it only runs for the one location a user clicks on,
++    and reuses the /dates list that a prior get_ndvi_at_location() call
++    for the same point will likely have already cached.
++    """
++    cache_key = f"{round(lat, 2)},{round(lon, 2)}"
++    now = datetime.now(timezone.utc)
++    cached = _history_cache.get(cache_key)
++    if cached and (now - cached["fetched_at"]).total_seconds() < _HISTORY_CACHE_HOURS * 3600:
++        return cached["result"]
++
++    dates_list = _get_available_dates(lat, lon)
++    if not dates_list:
++        result = {
++            "lat": lat, "lon": lon, "years": [],
++            "error": "Could not retrieve MODIS composite dates for this location.",
++        }
++        _history_cache[cache_key] = {"result": result, "fetched_at": now}
++        return result
++
++    # Anchor "same approximate period" on whichever real composite is
++    # currently the latest-available for this point — i.e. the exact same
++    # period the live Insight-card NDVI value is already using — rather
++    # than an arbitrary hardcoded month.
++    now_candidates = sorted([(cd, md) for (cd, md) in dates_list if cd <= now], key=lambda c: c[0])
++    if not now_candidates:
++        result = {
++            "lat": lat, "lon": lon, "years": [],
++            "error": "No published MODIS composite available up to the present for this location.",
++        }
++        _history_cache[cache_key] = {"result": result, "fetched_at": now}
++        return result
++
++    latest_cal_date, _ = now_candidates[-1]
++    ref_month, ref_day, latest_year = latest_cal_date.month, latest_cal_date.day, latest_cal_date.year
++
++    target_years = sorted(set(_HISTORY_REFERENCE_YEARS + [latest_year]))
++
++    def fetch_year(year: int) -> Dict[str, Any]:
++        try:
++            target_dt = datetime(year, ref_month, ref_day, tzinfo=timezone.utc)
++        except ValueError:
++            # e.g. reference day is Feb 29 and `year` isn't a leap year
++            target_dt = datetime(year, ref_month, 28, tzinfo=timezone.utc)
++
++        match = _nearest_available_modis_date(lat, lon, target_dt)
++        if match is None:
++            return {"year": year, "ndvi": None, "modis_date": None, "calendar_date": None, "data_source": "unavailable"}
++
++        cal_date, modis_date = match
++        ndvi_value = _fetch_subset_ndvi_value(lat, lon, modis_date)
++        if ndvi_value is None:
++            return {"year": year, "ndvi": None, "modis_date": modis_date,
++                     "calendar_date": cal_date.date().isoformat(), "data_source": "unavailable"}
++
++        return {"year": year, "ndvi": ndvi_value, "modis_date": modis_date,
++                 "calendar_date": cal_date.date().isoformat(), "data_source": "real_modis"}
++
++    # A handful of years (<=6), run concurrently so the chart doesn't take
++    # 15-20+ seconds to render if fetched one at a time — this is nowhere
++    # near the scale of the 504-point grid's worker pool.
++    with ThreadPoolExecutor(max_workers=6) as executor:
++        years_out = list(executor.map(fetch_year, target_years))
++
++    result = {
++        "lat": lat,
++        "lon": lon,
++        "reference_period": f"{ref_month:02d}-{ref_day:02d}",
++        "years": years_out,
++    }
++    _history_cache[cache_key] = {"result": result, "fetched_at": now}
++    return result
++
++
+ def _estimate_ndvi_by_biome(lat: float, lon: float, dt: datetime) -> float:
+     """
+     Fallback ONLY — biome/season-based NDVI estimate, used solely when the
+@@ -177,7 +406,16 @@
+ 
+ def get_vegetation_geojson() -> Dict[str, Any]:
+     global _ndvi_cache, _last_fetch_time
+-    
++
++    if not VEGETATION_GRID_ENABLED:
++        logger.info(
++            "NDVI: global vegetation grid is temporarily disabled — validate a single "
++            "location via get_ndvi_at_location() first (e.g. one Insight-card click "
++            "showing data_source=real_modis in the log), then flip "
++            "VEGETATION_GRID_ENABLED to True in modis_ndvi.py."
++        )
++        return {"type": "FeatureCollection", "features": [], "metadata": {"disabled": True}}
++
+     now = datetime.now(timezone.utc)
+     
+     if _ndvi_cache and _last_fetch_time:
+--- a/backend/main.py
++++ b/backend/main.py
+@@ -186,6 +186,11 @@
+     """Near real-time NDVI analysis for specific coordinates."""
+     return modis_ndvi.get_ndvi_at_location(lat, lon, date)
+ 
++@app.get("/ndvi-history")
++def get_ndvi_history(lat: float = Query(...), lon: float = Query(...)):
++    """Real historical NDVI for specific coordinates across fixed reference years, seasonally matched."""
++    return modis_ndvi.get_ndvi_history(lat, lon)
++
+ @app.get("/climate")
+ def get_climate(lat: float = Query(None), lon: float = Query(None)):
+     """
+--- a/js/api.js
++++ b/js/api.js
+@@ -82,6 +82,10 @@
+         return this.get('/ndvi-value', { lat, lon, date });
+     }
+ 
++    async getNdviHistory(lat, lon) {
++        return this.get('/ndvi-history', { lat, lon });
++    }
++
+     async getWildfires() {
+         return this.get('/wildfires');
+     }
+--- a/js/globe.js
++++ b/js/globe.js
+@@ -596,15 +596,21 @@
+             // different upstream services (Open-Meteo, MODIS) than the
+             // existing calls, so there's no shared rate limit to worry
+             // about by running them concurrently.
+-            const [forecastData, aqiForecastData, wildfireRiskData] = await Promise.all([
++            const [forecastData, aqiForecastData, wildfireRiskData, ndviHistoryData] = await Promise.all([
+                 api.getWeatherForecast(lat, lon, 7),
+                 api.getAirQualityForecast(lat, lon, 5),
+                 api.getWildfireRisk(lat, lon),
++                // Vegetation History chart — location-scoped only (never
++                // touches the 504-point global grid); fetched alongside
++                // the other per-click calls rather than blocking the rest
++                // of the panel on it.
++                api.getNdviHistory(lat, lon),
+             ]);
+ 
+             if (ui) {
+                 ui.updateAnalyticsPanel(climateData, envData, shiData, ndviData);
+                 ui.updateForecastPanels(forecastData, aqiForecastData, wildfireRiskData);
++                ui.updateNdviHistoryChart(ndviHistoryData);
+             }
+         } catch (e) {
+             console.error("Failed to load analytics:", e);
+--- a/js/ui.js
++++ b/js/ui.js
+@@ -1091,6 +1091,58 @@
+             }
+         });
+ 
++        // Vegetation History chart — a real labeled trend (year -> NDVI),
++        // not a sparkline, so unlike insightChart above this one shows its
++        // axes. spanGaps: false is deliberate: a null value for a year
++        // means "no real MODIS composite found within tolerance" (see
++        // get_ndvi_history's data_source: "unavailable"), and this must
++        // render as a visible gap in the line, never bridged/interpolated
++        // — bridging it would visually fabricate a value that was never
++        // measured.
++        const ctxNdviHistory = document.getElementById('ndviHistoryChart').getContext('2d');
++        this.ndviHistoryChart = new Chart(ctxNdviHistory, {
++            type: 'line',
++            data: {
++                labels: [],
++                datasets: [{
++                    label: 'NDVI',
++                    data: [],
++                    borderColor: '#22c55e',
++                    backgroundColor: 'rgba(34, 197, 94, 0.1)',
++                    tension: 0.3,
++                    spanGaps: false,
++                    pointRadius: 4,
++                    pointBackgroundColor: '#22c55e',
++                    fill: true
++                }]
++            },
++            options: {
++                responsive: true,
++                maintainAspectRatio: false,
++                plugins: {
++                    legend: { display: false },
++                    tooltip: {
++                        callbacks: {
++                            label: (ctx) => ctx.parsed.y === null
++                                ? 'No real data for this year'
++                                : `NDVI ${ctx.parsed.y.toFixed(3)}`
++                        }
++                    }
++                },
++                scales: {
++                    y: {
++                        min: 0,
++                        max: 1,
++                        grid: { color: 'rgba(255,255,255,0.05)' },
++                        ticks: { color: '#94a3b8', font: { size: 10 } }
++                    },
++                    x: {
++                        grid: { display: false },
++                        ticks: { color: '#94a3b8', font: { size: 10 } }
++                    }
++                }
++            }
++        });
+         // AQI forecast — bar chart so each day's peak reads as a distinct
+         // event, and colored per-bar against the same AQI thresholds used
+         // by the sensor dots on the globe and the extension's alert
+@@ -1266,6 +1318,18 @@
+         return 'Hazardous';
+     }
+ 
++    // NDVI value -> {icon, color}, collapsing globeManager's 5-tier
++    // _ndviClassification() text into a 3-tier color/icon read (the same
++    // health-color bands the right panel's stat-ndvi already uses, though
++    // that one referenced a non-existent 'var(--warning)' CSS variable —
++    // fixed here to the actual var(--warning-amber) token).
++    _ndviBand(ndvi) {
++        if (ndvi === null || ndvi === undefined) return { icon: 'fa-seedling', color: 'var(--text-secondary)' };
++        if (ndvi <= 0.2) return { icon: 'fa-mountain', color: 'var(--danger)' };
++        if (ndvi <= 0.6) return { icon: 'fa-seedling', color: 'var(--warning-amber)' };
++        return { icon: 'fa-tree', color: 'var(--success)' };
++    }
++
+     _updateAqiForecastChart(aqiForecastData) {
+         const note = document.getElementById('aqi-forecast-note');
+         if (!this.aqiForecastChart) return;
+@@ -1608,9 +1672,96 @@
+                 const ndviPct = Math.min(Math.max((ndviData.ndvi - NDVI_MIN) / (NDVI_MAX - NDVI_MIN), 0), 1) * 100;
+                 ndviMarkerEl.style.left = `${ndviPct}%`;
+             }
++
++            // Vegetation (NDVI) data-node: unlike the legend above, this is
++            // always visible regardless of whether the Vegetation globe
++            // layer is toggled on — it's the per-location number, not an
++            // explanation of the globe's color overlay.
++            if (ndviData && ndviData.ndvi !== undefined) {
++                const ndviBand = this._ndviBand(ndviData.ndvi);
++                const ndviValueEl = document.getElementById('node-ndvi');
++                const ndviIconEl = document.getElementById('node-ndvi-icon');
++                const ndviSubEl2 = document.getElementById('node-ndvi-sub');
++                const ndviNodeMarkerEl = document.getElementById('node-ndvi-marker');
++
++                if (ndviValueEl) {
++                    ndviValueEl.innerText = ndviData.ndvi.toFixed(2);
++                    ndviValueEl.style.color = ndviBand.color;
++                }
++                if (ndviIconEl) {
++                    ndviIconEl.className = `fa-solid ${ndviBand.icon} data-node-icon`;
++                    ndviIconEl.style.color = ndviBand.color;
++                }
++                if (ndviSubEl2) {
++                    const classification = window.globeManager?._ndviClassification(ndviData.ndvi) ?? '';
++                    ndviSubEl2.textContent = `${classification} — NASA MODIS`;
++                }
++                if (ndviNodeMarkerEl) {
++                    const NDVI_MIN = 0, NDVI_MAX = 0.9;
++                    const pct = Math.min(Math.max((ndviData.ndvi - NDVI_MIN) / (NDVI_MAX - NDVI_MIN), 0), 1) * 100;
++                    ndviNodeMarkerEl.style.left = `${pct}%`;
++                }
++                this._setStatBadge('node-ndvi', ndviData.data_source);
++            }
+         }, 1200);
+     }
+ 
++    // Vegetation History: renders the year -> NDVI chart + trend summary
++    // from get_ndvi_history(). Deliberately separate from updateInsightCard
++    // above (called right alongside it from globe.js) rather than folded
++    // in, so the existing NDVI current-value logic there stays untouched.
++    updateNdviHistoryChart(historyData) {
++        const summaryEl = document.getElementById('ndvi-history-summary');
++        const emptyEl = document.getElementById('ndvi-history-empty');
++        const sectionEl = document.getElementById('ndvi-history-section');
++        if (!this.ndviHistoryChart || !sectionEl) return;
++
++        const years = historyData && Array.isArray(historyData.years) ? historyData.years : [];
++        const validYears = years.filter(y => y.data_source === 'real_modis' && y.ndvi !== null && y.ndvi !== undefined);
++
++        if (years.length === 0 || validYears.length === 0) {
++            // Honest empty state — never draw a chart implying data exists
++            // when every year came back unavailable (e.g. historyData.error,
++            // or every single reference year happened to be cloud-masked).
++            this.ndviHistoryChart.data.labels = [];
++            this.ndviHistoryChart.data.datasets[0].data = [];
++            this.ndviHistoryChart.update();
++            if (summaryEl) { summaryEl.textContent = ''; summaryEl.classList.add('hidden'); }
++            if (emptyEl) emptyEl.classList.remove('hidden');
++            return;
++        }
++
++        if (emptyEl) emptyEl.classList.add('hidden');
++        if (summaryEl) summaryEl.classList.remove('hidden');
++
++        // Missing years become explicit null data points (never
++        // interpolated/fabricated) — spanGaps: false on the chart (see
++        // its init above) renders these as a visible break in the line.
++        this.ndviHistoryChart.data.labels = years.map(y => String(y.year));
++        this.ndviHistoryChart.data.datasets[0].data = years.map(y =>
++            (y.data_source === 'real_modis' && y.ndvi !== null && y.ndvi !== undefined) ? y.ndvi : null
++        );
++        this.ndviHistoryChart.update();
++
++        if (summaryEl) {
++            if (validYears.length < 2) {
++                summaryEl.textContent = 'Not enough real historical data at this location to determine a trend.';
++            } else {
++                const earliest = validYears[0];
++                const latest = validYears[validYears.length - 1];
++                const pctChange = earliest.ndvi !== 0
++                    ? ((latest.ndvi - earliest.ndvi) / Math.abs(earliest.ndvi)) * 100
++                    : 0;
++
++                // Per spec: >+5% Improving, <-5% Declining, otherwise Stable.
++                const trendLabel = pctChange > 5 ? 'Improving' : pctChange < -5 ? 'Declining' : 'Stable';
++                const sign = pctChange > 0 ? '+' : '';
++                summaryEl.textContent =
++                    `Overall trend: ${trendLabel} (${sign}${pctChange.toFixed(1)}% from ${earliest.year} to ${latest.year})`;
++            }
++        }
++    }
++
+     showSensorPopup(id, data, x, y) {
+         const popup = document.getElementById('sensor-popup');
+         const title = document.getElementById('popup-title');
+--- a/index.html
++++ b/index.html
+@@ -304,6 +304,17 @@
+                     </div>
+                     <span class="data-node-sub" id="node-anomaly-sub"></span>
+                 </div>
++                <div class="data-node">
++                    <span class="label">Vegetation (NDVI)</span>
++                    <span class="value-row">
++                        <i class="fa-solid fa-seedling data-node-icon" id="node-ndvi-icon"></i>
++                        <span class="value" id="node-ndvi">--</span>
++                    </span>
++                    <div class="ndvi-context-bar">
++                        <div class="ndvi-context-marker" id="node-ndvi-marker"></div>
++                    </div>
++                    <span class="data-node-sub" id="node-ndvi-sub"></span>
++                </div>
+             </div>
+             <div class="chart-container" style="height: 140px;">
+                 <canvas id="insightChart"></canvas>
+@@ -320,6 +331,18 @@
+                 </div>
+                 <div class="text-center x-small text-secondary mt-1">VEGETATION DENSITY SCALE (NDVI)</div>
+             </div>
++
++            <!-- Vegetation History: real historical NDVI for this location,
++                 seasonally matched across fixed reference years. Location-
++                 scoped only — never touches the global 504-point grid. -->
++            <div class="ndvi-history-section" id="ndvi-history-section">
++                <span class="label">Vegetation History (NDVI)</span>
++                <div class="chart-container" style="height: 130px;">
++                    <canvas id="ndviHistoryChart"></canvas>
++                </div>
++                <span class="data-node-sub" id="ndvi-history-summary"></span>
++                <span class="data-node-sub hidden" id="ndvi-history-empty">Historical MODIS data unavailable for this location.</span>
++            </div>
+         </div>
+ 
+         <!-- Right Panel: Analytics -->
+@@ -676,7 +699,7 @@
+     <script src="js/config.js"></script>
+     <script src="js/state.js"></script>
+     <script src="js/api.js?v=3"></script>
+-    <script src="js/ui.js?v=18"></script>
++    <script src="js/ui.js?v=20"></script>
+     <script src="js/weather.js"></script>
+     <script src="js/snapshot-viewer.js"></script>
+     <script src="js/globe.js?v=15"></script>
+--- a/css/style.css
++++ b/css/style.css
+@@ -1592,6 +1592,29 @@
+     transition: left 0.6s ease, right 0.6s ease, background 0.3s ease;
+ }
+ 
++/* NDVI context bar: same brown->green vegetation-density gradient as the
++   globe-layer legend (.ndvi-legend-bar), but scoped to this single node so
++   the per-location reading has a frame of reference without requiring the
++   Vegetation globe layer to be toggled on. */
++.ndvi-context-bar {
++    position: relative;
++    height: 4px;
++    width: 100%;
++    margin-top: 8px;
++    border-radius: 2px;
++    background: linear-gradient(to right, #a16207 0%, #ca8a04 20%, #84cc16 50%, #15803d 80%, #064e3b 100%);
++}
++
++.ndvi-context-marker {
++    position: absolute;
++    top: -3px;
++    width: 2px;
++    height: 10px;
++    background: var(--text-primary);
++    left: 0%;
++    transition: left 0.6s ease;
++}
++
+ /* Custom Scrollbar */
+ ::-webkit-scrollbar {
+     width: 6px;
+@@ -1963,6 +1986,26 @@
+     letter-spacing: 0.5px;
+ }
+ 
++/* Vegetation History section — reuses the same .label/.data-node-sub/
++   .chart-container tokens already used elsewhere in the insight card,
++   so it doesn't introduce a new visual language. */
++.ndvi-history-section {
++    margin-top: 15px;
++}
++
++.ndvi-history-section .label {
++    display: block;
++    font-size: 0.7rem;
++    color: var(--text-secondary);
++    text-transform: uppercase;
++    margin-bottom: 6px;
++}
++
++#ndvi-history-summary {
++    display: block;
++    margin-top: 4px;
++}
++
+ .shimmer {
+     background: linear-gradient(90deg, transparent, rgba(255,255,255,0.05), transparent);
+     background-size: 200% 100%;

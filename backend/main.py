@@ -1,5 +1,7 @@
 import os
 import sys
+import json
+import threading
 import requests
 import logging
 from dotenv import load_dotenv
@@ -83,18 +85,8 @@ def get_stations():
     """Fetch global air quality stations from real OpenAQ v3 data.
     (v1/v2 were retired Jan 2025 and return HTTP 410 — this endpoint was
     silently broken until migrated to v3, which requires OPENAQ_API_KEY.)
-    NOTE: metadata only — does NOT include each station's live reading.
-    See /stations-with-readings for that."""
+    NOTE: metadata only — does NOT include each station's live reading."""
     return openaq_client.get_stations(limit=1000)
-
-@app.get("/stations-with-readings")
-def get_stations_with_readings():
-    """Real stations WITH each one's actual latest PM2.5 reading resolved
-    server-side. Use this (not /stations) for anything that needs to color
-    or filter by real air quality — OpenAQ v3's plain /locations list does
-    not include live readings inline, which is exactly the bug this
-    endpoint fixes for the Air Quality layer toggle."""
-    return openaq_client.get_stations_with_readings()
 
 @app.get("/country-boundaries")
 def country_boundaries():
@@ -108,8 +100,66 @@ import time as _time
 # lookups (on top of the OpenAQ aggregate), which is meaningfully slower
 # than AQI alone. Cached for 6 hours since none of these components change
 # minute-to-minute at the country level.
+#
+# PERSISTENT + STALE-WHILE-REFRESH: this used to be purely in-memory,
+# which meant every single backend restart tonight (there were many)
+# wiped it, forcing the next request to synchronously wait through the
+# full OpenAQ station sweep (up to 200, now 80 — see
+# get_country_aqi_aggregate) with zero progress feedback, which is what
+# actually caused the Global Health Index tab's "Loading real station
+# data..." to feel stuck for many minutes at a time. Now: the result is
+# also written to a small JSON file on disk, so a fresh restart can load
+# a recent result INSTANTLY instead of recomputing from scratch. If that
+# loaded (or in-memory) result has aged past _COMPOSITE_SHI_CACHE_SECONDS,
+# it's still served immediately as-is, while a background thread kicks
+# off a real recompute and overwrites both the in-memory and on-disk
+# copies when it finishes — the user only ever waits synchronously on
+# the very first request this app has ever served with no prior result
+# anywhere to fall back to.
 _composite_shi_cache = {"data": None, "computed_at": 0}
 _COMPOSITE_SHI_CACHE_SECONDS = 6 * 3600
+_SHI_GLOBAL_CACHE_FILE = os.path.join(curr_dir, "data", "cache", "shi_global_cache.json")
+_shi_global_refresh_lock = threading.Lock()
+_shi_global_refreshing = False
+
+
+def _load_shi_global_cache_from_disk():
+    try:
+        with open(_SHI_GLOBAL_CACHE_FILE, "r") as f:
+            payload = json.load(f)
+        return payload.get("data"), payload.get("computed_at")
+    except Exception:
+        # Missing file (first run ever) or unreadable — not an error
+        # worth logging, just nothing to load yet.
+        return None, None
+
+
+def _save_shi_global_cache_to_disk(data, computed_at):
+    try:
+        os.makedirs(os.path.dirname(_SHI_GLOBAL_CACHE_FILE), exist_ok=True)
+        with open(_SHI_GLOBAL_CACHE_FILE, "w") as f:
+            json.dump({"data": data, "computed_at": computed_at}, f)
+    except Exception as e:
+        logger.warning(f"SHI global: failed to persist cache to disk: {e}")
+
+
+def _refresh_shi_global_in_background():
+    global _shi_global_refreshing
+    try:
+        response = shi_composite.compute_global_shi()
+        if response.get("status") == "ok":
+            now = _time.time()
+            _composite_shi_cache["data"] = response
+            _composite_shi_cache["computed_at"] = now
+            _save_shi_global_cache_to_disk(response, now)
+            logger.info("SHI global: background refresh completed and persisted to disk")
+        else:
+            logger.warning(f"SHI global: background refresh returned status={response.get('status')}, not caching")
+    except Exception as e:
+        logger.warning(f"SHI global: background refresh failed: {e}")
+    finally:
+        with _shi_global_refresh_lock:
+            _shi_global_refreshing = False
 
 
 @app.get("/shi-global")
@@ -132,7 +182,14 @@ def shi_global():
 
     Requires OPENAQ_API_KEY in backend/.env (see .env.example). The
     World Bank and WHO GHO sources need no key at all.
+
+    See the cache setup above this function for the persistent +
+    stale-while-refresh behavior — this route itself almost never blocks
+    on the real, slow OpenAQ sweep once at least one successful result
+    has ever been computed and persisted.
     """
+    global _shi_global_refreshing
+
     if not os.environ.get("OPENAQ_API_KEY", "").strip():
         return {
             "countries": [],
@@ -141,15 +198,41 @@ def shi_global():
         }
 
     now = _time.time()
-    if (_composite_shi_cache["data"] is not None
-            and (now - _composite_shi_cache["computed_at"]) < _COMPOSITE_SHI_CACHE_SECONDS):
+
+    # Nothing in this process's memory yet — try a persisted result from
+    # a previous run before falling back to a synchronous recompute.
+    if _composite_shi_cache["data"] is None:
+        disk_data, disk_computed_at = _load_shi_global_cache_from_disk()
+        if disk_data is not None:
+            _composite_shi_cache["data"] = disk_data
+            _composite_shi_cache["computed_at"] = disk_computed_at
+            logger.info("SHI global: loaded persisted result from disk after restart")
+
+    if _composite_shi_cache["data"] is not None:
+        age = now - _composite_shi_cache["computed_at"]
+        if age >= _COMPOSITE_SHI_CACHE_SECONDS:
+            # Stale — serve it anyway (better than a blank "Loading..."
+            # screen) and kick off exactly one background refresh, never
+            # more than one at a time even if several requests land
+            # while it's running.
+            with _shi_global_refresh_lock:
+                start_refresh = not _shi_global_refreshing
+                if start_refresh:
+                    _shi_global_refreshing = True
+            if start_refresh:
+                threading.Thread(target=_refresh_shi_global_in_background, daemon=True).start()
         return _composite_shi_cache["data"]
 
+    # Truly nothing cached anywhere — memory or disk — meaning this is
+    # the very first time this app has ever successfully computed this.
+    # Has to block synchronously this one time; every future restart
+    # will have a persisted file to serve instantly instead of this path.
     response = shi_composite.compute_global_shi()
 
     if response.get("status") == "ok":
         _composite_shi_cache["data"] = response
         _composite_shi_cache["computed_at"] = now
+        _save_shi_global_cache_to_disk(response, now)
 
     return response
 
@@ -176,15 +259,15 @@ def get_wildfires():
     """Returns top 500 active wildfires from NASA FIRMS as GeoJSON."""
     return nasa_firms.get_wildfires_geojson()
 
-@app.get("/vegetation")
-def get_vegetation():
-    """Returns biome-modelled global NDVI distribution as GeoJSON for overview."""
-    return modis_ndvi.get_vegetation_geojson()
-
 @app.get("/ndvi-value")
 def get_ndvi_value(lat: float = Query(...), lon: float = Query(...), date: str = Query(None)):
     """Near real-time NDVI analysis for specific coordinates."""
     return modis_ndvi.get_ndvi_at_location(lat, lon, date)
+
+@app.get("/ndvi-history")
+def get_ndvi_history(lat: float = Query(...), lon: float = Query(...)):
+    """Real historical NDVI for specific coordinates across fixed reference years, seasonally matched."""
+    return modis_ndvi.get_ndvi_history(lat, lon)
 
 @app.get("/climate")
 def get_climate(lat: float = Query(None), lon: float = Query(None)):
@@ -197,27 +280,15 @@ def get_climate(lat: float = Query(None), lon: float = Query(None)):
         return climate.get_location_climate(lat, lon)
     return climate.get_climate_geojson()
 
-@app.get("/rainfall")
-def get_rainfall():
-    """Global real-time precipitation grid (GeoJSON) — real current
-    readings from Open-Meteo, same underlying fetch as /climate's
-    temperature grid."""
-    return climate.get_rainfall_geojson()
+@app.get("/temperature-history")
+def get_temperature_history(lat: float = Query(...), lon: float = Query(...)):
+    """Real historical temperature for specific coordinates across fixed reference years, seasonally matched."""
+    return climate.get_temperature_history(lat, lon)
 
-@app.get("/weather-conditions")
-def get_weather_conditions():
-    """Global real-time cloud cover grid (GeoJSON) — real current readings
-    from Open-Meteo, same underlying fetch as /climate and /rainfall."""
-    return climate.get_weather_conditions_geojson()
-
-@app.get("/wind")
-def get_wind():
-    """Global real-time wind speed + direction grid (GeoJSON) — same
-    underlying Open-Meteo fetch as /climate, /rainfall, and
-    /weather-conditions (wind fields were added to that shared request
-    rather than issuing a separate upstream call). Powers the wind
-    arrow-glyph layer on the globe."""
-    return climate.get_wind_geojson()
+@app.get("/rainfall-history")
+def get_rainfall_history(lat: float = Query(...), lon: float = Query(...)):
+    """Real annual precipitation totals for specific coordinates across fixed reference years plus the latest fully-completed year."""
+    return climate.get_rainfall_history(lat, lon)
 
 @app.get("/environment")
 def get_environment(lat: float = Query(...), lon: float = Query(...)):
@@ -402,6 +473,20 @@ def get_alerts_summary(
     fetch and cache.
     """
     return alerts.get_alert_summary(lat, lon, radius_km)
+
+@app.get("/aqi-verification")
+def get_aqi_verification(
+    lat: float = Query(..., ge=-90, le=90),
+    lon: float = Query(..., ge=-180, le=180),
+    radius_km: float = Query(25.0, gt=0, le=25),
+):
+    """
+    Real nearest-OpenAQ-station verification for the Insight card's AQI
+    node — genuinely nearest by distance, NOT the worst-reading-in-range
+    logic /alerts/summary uses for its own (correct, for an alert system)
+    purposes. See get_nearest_station_verification's docstring.
+    """
+    return alerts.get_nearest_station_verification(lat, lon, radius_km)
 
 
 # --- Predictive AI (Phase 2) ---

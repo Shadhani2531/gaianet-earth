@@ -4,6 +4,7 @@ import math
 import requests
 from datetime import datetime, timedelta, timezone
 from typing import Dict, Any, List, Optional
+from concurrent.futures import ThreadPoolExecutor
 
 logger = logging.getLogger(__name__)
 
@@ -204,102 +205,126 @@ def get_climate_geojson() -> Dict[str, Any]:
     }
 
 
-def get_rainfall_geojson() -> Dict[str, Any]:
-    grid = _fetch_global_grid_conditions()
-    if not grid:
-        return {"type": "FeatureCollection", "features": [],
-                "metadata": {"source": "Open-Meteo", "status": "unavailable"}}
+# Fixed reference years — same as Temperature/Vegetation History, for a
+# consistent story across all three. 2001 is the earliest since this is
+# the shared convention across this project's history features (MODIS
+# coverage begins Feb 2000; Open-Meteo's ERA5 archive itself goes back
+# much further, but there's no reason for rainfall's reference years to
+# differ from the other two history features).
+_RAINFALL_HISTORY_REFERENCE_YEARS = [2001, 2005, 2010, 2015, 2020]
+_rainfall_history_cache: Dict[str, Any] = {}
+_RAINFALL_HISTORY_CACHE_HOURS = 24 * 30
 
-    features = []
-    for r in grid["readings"]:
-        features.append({
-            "type": "Feature",
-            "geometry": {"type": "Point", "coordinates": [float(r["lon"]), float(r["lat"])]},
-            "properties": {"value": float(r["precip"]), "type": "rainfall", "data_source": "real_openmeteo"}
-        })
-
-    return {
-        "type": "FeatureCollection",
-        "features": features,
-        "metadata": {
-            "source": "Open-Meteo (real current precipitation, mm in the last hour)",
-            "timestamp": grid["fetched_at"].isoformat()
-        }
-    }
+# A year's ANNUAL SUM is only reported if at least this fraction of its
+# days have real data. Unlike an average (NDVI/temperature), a SUM is
+# directly biased by missing days — a handful of gaps silently
+# understate the real total rather than just adding noise — so summing
+# whatever real days happen to exist without a completeness floor could
+# quietly misrepresent an incomplete year as if it were a full one.
+_RAINFALL_MIN_COMPLETENESS = 0.90
 
 
-def get_weather_conditions_geojson() -> Dict[str, Any]:
-    grid = _fetch_global_grid_conditions()
-    if not grid:
-        return {"type": "FeatureCollection", "features": [],
-                "metadata": {"source": "Open-Meteo", "status": "unavailable"}}
-
-    features = []
-    for r in grid["readings"]:
-        if r.get("cloud_cover") is None:
-            continue
-        features.append({
-            "type": "Feature",
-            "geometry": {"type": "Point", "coordinates": [float(r["lon"]), float(r["lat"])]},
-            "properties": {"value": float(r["cloud_cover"]), "type": "weather_conditions", "data_source": "real_openmeteo"}
-        })
-
-    return {
-        "type": "FeatureCollection",
-        "features": features,
-        "metadata": {
-            "source": "Open-Meteo (real current cloud cover, %)",
-            "timestamp": grid["fetched_at"].isoformat()
-        }
-    }
-
-
-def get_wind_geojson() -> Dict[str, Any]:
+def _latest_fully_completed_year(now: datetime) -> int:
     """
-    Real current wind speed + direction on the same coarse global grid as
-    temperature/rainfall/cloud-cover — reuses _fetch_global_grid_conditions's
-    existing cache rather than a separate upstream call, since Open-Meteo
-    already returns wind alongside those fields in one request.
-
-    `wind_direction_deg` follows the standard meteorological convention:
-    degrees clockwise from north, indicating the direction the wind is
-    blowing FROM (0=N, 90=E, 180=S, 270=W). The frontend's arrow-glyph
-    wind layer rotates arrows to point where the wind is blowing TOWARD
-    (direction + 180) since that reads more intuitively as a flow
-    indicator — documented here so the convention flip isn't a mystery
-    to whoever touches this next.
+    Returns the most recent calendar year that has BOTH actually ended
+    AND cleared Open-Meteo's archive publishing lag (~5 days, same lag
+    used elsewhere in this file) — never the current, still-in-progress
+    year. An annual total needs a full Jan 1 - Dec 31 of real data;
+    reporting this year's partial total as if it were a complete annual
+    figure would misrepresent it (e.g. flagging 2026 as "the latest
+    year" in September 2026, when only ~8 months have actually happened).
     """
-    grid = _fetch_global_grid_conditions()
-    if not grid:
-        return {"type": "FeatureCollection", "features": [],
-                "metadata": {"source": "Open-Meteo", "status": "unavailable"}}
+    candidate = now.year - 1
+    while datetime(candidate, 12, 31, tzinfo=timezone.utc) + timedelta(days=5) > now:
+        candidate -= 1
+    return candidate
 
-    features = []
-    for r in grid["readings"]:
-        speed = r.get("wind_speed_kmh")
-        direction = r.get("wind_direction_deg")
-        if speed is None or direction is None:
-            continue
-        features.append({
-            "type": "Feature",
-            "geometry": {"type": "Point", "coordinates": [float(r["lon"]), float(r["lat"])]},
-            "properties": {
-                "value": float(speed),
-                "speed_kmh": float(speed),
-                "direction_deg": float(direction),
-                "type": "wind",
-                "data_source": "real_openmeteo",
-            }
-        })
 
-    return {
-        "type": "FeatureCollection",
-        "features": features,
-        "metadata": {
-            "source": "Open-Meteo (real current wind speed + direction, 10m)",
-            "timestamp": grid["fetched_at"].isoformat()
-        }
+def get_rainfall_history(lat: float, lon: float) -> Dict[str, Any]:
+    """
+    Real ANNUAL precipitation totals (mm/year, Jan 1 - Dec 31 sum) at
+    (lat, lon) for _RAINFALL_HISTORY_REFERENCE_YEARS plus the latest
+    FULLY COMPLETED calendar year (see _latest_fully_completed_year —
+    never the current, still-in-progress year).
+
+    Deliberately an ANNUAL total rather than a fixed seasonal window
+    (the approach used for NDVI's Jul-Aug comparison): rainfall
+    seasonality varies enormously by region — India's monsoon,
+    Australia's wet season, Finland's snow-dominated winter, and
+    Brazil's basin patterns all follow completely different calendars —
+    so no single fixed window would be a fair, globally meaningful
+    comparison the way Jul-Aug reasonably works for NDVI. A full-year
+    total sidesteps that entirely.
+
+    Every value is a real sum over real Open-Meteo archive daily
+    readings — never fabricated or interpolated. Because summing (unlike
+    averaging) is directly biased by missing days, a year is only
+    reported if at least _RAINFALL_MIN_COMPLETENESS of its days have
+    real data; otherwise it's null/unavailable. days_used/days_expected
+    are recorded either way for transparency. Cached per location; see
+    _RAINFALL_HISTORY_CACHE_HOURS.
+    """
+    cache_key = f"{round(lat, 2)},{round(lon, 2)}"
+    now = datetime.now(timezone.utc)
+    cached = _rainfall_history_cache.get(cache_key)
+    if cached and (now - cached["fetched_at"]).total_seconds() < _RAINFALL_HISTORY_CACHE_HOURS * 3600:
+        return cached["result"]
+
+    latest_year = _latest_fully_completed_year(now)
+    target_years = sorted(set(_RAINFALL_HISTORY_REFERENCE_YEARS + [latest_year]))
+
+    def fetch_year(year: int) -> Dict[str, Any]:
+        try:
+            start = datetime(year, 1, 1, tzinfo=timezone.utc)
+            end = datetime(year, 12, 31, tzinfo=timezone.utc)
+            days_expected = (end - start).days + 1  # 365 or 366
+
+            url = (
+                f"https://archive-api.open-meteo.com/v1/archive"
+                f"?latitude={lat}&longitude={lon}"
+                f"&start_date={start.strftime('%Y-%m-%d')}"
+                f"&end_date={end.strftime('%Y-%m-%d')}"
+                f"&daily=precipitation_sum&timezone=GMT"
+            )
+            resp = requests.get(url, timeout=15)
+            logger.info(f"Rainfall history: year {year} annual request ({start.date()}..{end.date()}) -> HTTP {resp.status_code}")
+            resp.raise_for_status()
+            data = resp.json()
+            daily_values = data.get("daily", {}).get("precipitation_sum", [])
+            real_values = [v for v in daily_values if v is not None]
+            days_used = len(real_values)
+
+            completeness = (days_used / days_expected) if days_expected else 0
+            if completeness < _RAINFALL_MIN_COMPLETENESS:
+                logger.info(
+                    f"Rainfall history: year {year} only {days_used}/{days_expected} days real "
+                    f"({completeness:.0%}) — below completeness threshold for ({lat},{lon})"
+                )
+                return {"year": year, "annual_mm": None, "days_used": days_used,
+                         "days_expected": days_expected, "data_source": "unavailable"}
+
+            annual_total = round(sum(real_values), 1)
+            logger.info(f"Rainfall history: year {year} annual total {annual_total}mm from {days_used}/{days_expected} real days for ({lat},{lon})")
+            return {"year": year, "annual_mm": annual_total, "days_used": days_used,
+                     "days_expected": days_expected, "data_source": "real_openmeteo"}
+        except Exception as e:
+            logger.warning(f"Rainfall history: year {year} raised an unexpected error for ({lat},{lon}): {e}")
+            return {"year": year, "annual_mm": None, "days_used": 0, "days_expected": None, "data_source": "unavailable"}
+
+    # A handful of years (<=6), run concurrently — same reasoning as the
+    # other two history features.
+    with ThreadPoolExecutor(max_workers=6) as executor:
+        years_out = list(executor.map(fetch_year, target_years))
+
+    result = {
+        "lat": lat,
+        "lon": lon,
+        "metric": "annual_precipitation_mm",
+        "years": years_out,
     }
+    _rainfall_history_cache[cache_key] = {"result": result, "fetched_at": now}
+    return result
+
 
 def get_location_climate(lat: float, lon: float) -> Dict[str, Any]:
     """Provides time-series data using live Open-Meteo data."""
@@ -326,3 +351,99 @@ def get_location_climate(lat: float, lon: float) -> Dict[str, Any]:
         "source": "Open-Meteo Live API" if is_real else "Estimated (Open-Meteo unavailable — seasonal/latitude model used instead)",
         "data_source": "real_openmeteo" if is_real else "estimated_fallback"
     }
+
+
+# Fixed reference years for the Temperature History chart — same years as
+# the Vegetation History chart for a consistent story across both, though
+# unlike MODIS, Open-Meteo's ERA5-based archive has real daily data
+# continuously back to 1940, so there's no "is this year's data published
+# yet" concern the way there is for MODIS composites.
+_TEMP_HISTORY_REFERENCE_YEARS = [2001, 2005, 2010, 2015, 2020]
+_temp_history_cache: Dict[str, Any] = {}
+_TEMP_HISTORY_CACHE_HOURS = 24 * 30
+
+
+def get_temperature_history(lat: float, lon: float) -> Dict[str, Any]:
+    """
+    Real historical temperature at (lat, lon) for _TEMP_HISTORY_REFERENCE_
+    YEARS plus the current year, each matched to the SAME ~7-day window
+    around today's month/day (so a summer year isn't compared to a winter
+    one). Each year's value is the real average of temperature_2m_max
+    across that window from Open-Meteo's archive API (ERA5 reanalysis) —
+    or explicitly "unavailable" if the request fails/returns no valid
+    days, never fabricated or interpolated. Cached per location for
+    _TEMP_HISTORY_CACHE_HOURS, since fixed past years never change (only
+    the current year's window could ever need a refresh).
+    """
+    cache_key = f"{round(lat, 2)},{round(lon, 2)}"
+    now = datetime.now(timezone.utc)
+    cached = _temp_history_cache.get(cache_key)
+    if cached and (now - cached["fetched_at"]).total_seconds() < _TEMP_HISTORY_CACHE_HOURS * 3600:
+        return cached["result"]
+
+    ref_month, ref_day = now.month, now.day
+    target_years = sorted(set(_TEMP_HISTORY_REFERENCE_YEARS + [now.year]))
+
+    def fetch_year(year: int) -> Dict[str, Any]:
+        try:
+            try:
+                center = datetime(year, ref_month, ref_day, tzinfo=timezone.utc)
+            except ValueError:
+                # e.g. reference day is Feb 29 and `year` isn't a leap year
+                center = datetime(year, ref_month, 28, tzinfo=timezone.utc)
+
+            window_start = center - timedelta(days=3)
+            window_end = center + timedelta(days=3)
+
+            # Archive has ~5 day lag (same as get_live_climate_trends
+            # above). BUG FIX: previously this only clamped window_end
+            # down to (now - 5 days) while leaving window_start at
+            # (center - 3 days) — for the CURRENT year, center IS "today",
+            # so window_start (today - 3) was always AFTER the clamped
+            # window_end (today - 5), making the window invalid every
+            # single time, unconditionally — not a real data gap, just
+            # this bug. Fix: shift the WHOLE window earlier (keeping its
+            # ~7-day width) when it would otherwise reach beyond the lag,
+            # rather than only pulling in one edge.
+            latest_allowed = now - timedelta(days=5)
+            if window_end > latest_allowed:
+                window_end = latest_allowed
+                window_start = window_end - timedelta(days=6)
+
+            url = (
+                f"https://archive-api.open-meteo.com/v1/archive"
+                f"?latitude={lat}&longitude={lon}"
+                f"&start_date={window_start.strftime('%Y-%m-%d')}"
+                f"&end_date={window_end.strftime('%Y-%m-%d')}"
+                f"&daily=temperature_2m_max&timezone=GMT"
+            )
+            resp = requests.get(url, timeout=10)
+            logger.info(f"Temp history: year {year} window {window_start.date()}..{window_end.date()} -> HTTP {resp.status_code}")
+            resp.raise_for_status()
+            data = resp.json()
+            temps = [t for t in data.get("daily", {}).get("temperature_2m_max", []) if t is not None]
+
+            if not temps:
+                logger.info(f"Temp history: year {year} returned no valid daily values for ({lat},{lon})")
+                return {"year": year, "avg_temp_c": None, "data_source": "unavailable"}
+
+            avg_temp = round(sum(temps) / len(temps), 1)
+            return {"year": year, "avg_temp_c": avg_temp, "data_source": "real_openmeteo"}
+        except Exception as e:
+            logger.warning(f"Temp history: year {year} raised an unexpected error for ({lat},{lon}): {e}")
+            return {"year": year, "avg_temp_c": None, "data_source": "unavailable"}
+
+    # A handful of years (<=6), run concurrently — same reasoning as the
+    # Vegetation History fetch: keeps click-to-chart latency reasonable
+    # without approaching anything like the removed 504-point grid's scale.
+    with ThreadPoolExecutor(max_workers=6) as executor:
+        years_out = list(executor.map(fetch_year, target_years))
+
+    result = {
+        "lat": lat,
+        "lon": lon,
+        "reference_period": f"{ref_month:02d}-{ref_day:02d} (+/-3 days)",
+        "years": years_out,
+    }
+    _temp_history_cache[cache_key] = {"result": result, "fetched_at": now}
+    return result

@@ -32,6 +32,9 @@ class WeatherService:
                         "temp": data["main"]["temp"],
                         "clouds": data["clouds"]["all"],
                         "wind_speed": data["wind"]["speed"],
+                        # Standard meteorological convention: degrees clockwise
+                        # from north, direction the wind is blowing FROM.
+                        "wind_deg": data["wind"].get("deg"),
                         "visibility": data.get("visibility", 10000)
                     }
                 else:
@@ -61,6 +64,7 @@ class WeatherService:
             "temp": 25 - (abs_lat * 0.5), # Rough temp gradient
             "clouds": 40 if state == "Clouds" else 10,
             "wind_speed": 5.0,
+            "wind_deg": int((lat + lon) * 10) % 360,  # deterministic, clearly labeled mock via status above
             "visibility": 10000
         }
 
