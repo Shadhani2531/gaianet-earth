@@ -244,7 +244,8 @@ def _fetch_with_retry(fetch, pts, s, e, retries: int, wait_s: float, sleep):
 
 def compute_anomalies(points: List[Tuple[float, float]], today: Optional[date] = None,
                       fetch=None, pace_s: float = 0.0, progress=None, sleep=time.sleep,
-                      retries: int = 2, retry_wait_s: float = 65.0) -> List[Dict[str, Any]]:
+                      retries: int = 2, retry_wait_s: float = 65.0,
+                      window_end: Optional[date] = None) -> List[Dict[str, Any]]:
     """Anomaly for each point with the method described above. `fetch` is
     injectable for tests (defaults to the live archive).
 
@@ -252,7 +253,12 @@ def compute_anomalies(points: List[Tuple[float, float]], today: Optional[date] =
     126-point heatmap grid, where each request counts as 126 calls against
     Open-Meteo's 600/minute limit). pace_s == 0: up to 6 in parallel (fine
     for a single point: 31 calls). 429 responses are retried after the
-    per-minute window resets. progress(done, total) reports build progress."""
+    per-minute window resets. progress(done, total) reports build progress.
+
+    window_end=None (Insight card): the LATEST 7 days the archive has, per
+    point — the most up-to-date, accurate value.
+    window_end=<date> (heatmap): exactly the 7 days ending on that date (a
+    fixed Monday-Sunday week), so the grid only needs rebuilding weekly."""
     fetch = fetch or _archive_daily_mean
     today = today or datetime.now(timezone.utc).date()
     method = (f"Mean daily temperature over the last {RECENT_WINDOW_DAYS} days available minus the "
@@ -262,8 +268,12 @@ def compute_anomalies(points: List[Tuple[float, float]], today: Optional[date] =
             "data_source": "derived_real_openmeteo"}
     results: List[Dict[str, Any]] = [dict(base, anomaly_c=None, status="unavailable") for _ in points]
 
-    end = today - timedelta(days=ARCHIVE_LAG_DAYS)
-    start = end - timedelta(days=RECENT_FETCH_DAYS - 1)
+    if window_end is not None:
+        end = window_end
+        start = end - timedelta(days=RECENT_WINDOW_DAYS - 1)
+    else:
+        end = today - timedelta(days=ARCHIVE_LAG_DAYS)
+        start = end - timedelta(days=RECENT_FETCH_DAYS - 1)
     total_steps = 1 + len(ANOMALY_YEARS)
     if progress:
         progress(0, total_steps)
@@ -278,8 +288,12 @@ def compute_anomalies(points: List[Tuple[float, float]], today: Optional[date] =
     windows: Dict[int, List[date]] = {}
     for i, series in enumerate(recent):
         days = sorted(date.fromisoformat(t) for t in series)
+        if window_end is not None:
+            days = [d for d in days if start <= d <= end]      # fixed week: all 7 days required
         if len(days) < RECENT_WINDOW_DAYS:
-            results[i]["reason"] = "Recent archive data not available for this point"
+            results[i]["reason"] = ("Archive does not yet have the whole week for this point"
+                                    if window_end is not None else
+                                    "Recent archive data not available for this point")
             continue
         windows[i] = days[-RECENT_WINDOW_DAYS:]
 
@@ -363,6 +377,14 @@ def compute_anomalies(points: List[Tuple[float, float]], today: Optional[date] =
         })
         results[i].pop("reason", None)
     return results
+
+
+def last_complete_week_end(today: Optional[date] = None) -> date:
+    """Most recent Sunday whose whole Monday-Sunday week is already in the
+    archive (which lags ~ARCHIVE_LAG_DAYS)."""
+    today = today or datetime.now(timezone.utc).date()
+    latest = today - timedelta(days=ARCHIVE_LAG_DAYS)
+    return latest - timedelta(days=(latest.weekday() + 1) % 7)     # weekday(): Mon=0 ... Sun=6
 
 
 def get_temperature_anomaly(lat: float, lon: float) -> Dict[str, Any]:

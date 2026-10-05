@@ -17,6 +17,7 @@ backend/data/historical_cache/*
 !backend/data/historical_cache/.gitignore
 backend/data/anomaly_baseline_cache/*
 !backend/data/anomaly_baseline_cache/.gitignore
+backend/data/cache/
 *.tmp
 
 # IDEs
@@ -26,4 +27,3 @@ backend/data/anomaly_baseline_cache/*
 # OS
 .DS_Store
 Thumbs.db
-backend/data/cache/
