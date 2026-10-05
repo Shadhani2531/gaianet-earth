@@ -6,6 +6,7 @@ import requests
 import logging
 from dotenv import load_dotenv
 from fastapi import FastAPI, Query, HTTPException
+from typing import Optional
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
@@ -18,7 +19,7 @@ if curr_dir not in sys.path:
 # environment variables at import time.
 load_dotenv(os.path.join(curr_dir, ".env"))
 
-from services import nasa_firms, modis_ndvi, climate, mock_data, weather, scenario_engine, openaq_client, country_coords, alerts, forecast, wildfire_risk, gaia_agent, impact_report, worldbank_client, who_gho_client, shi_composite
+from services import nasa_firms, modis_ndvi, climate, mock_data, weather, scenario_engine, openaq_client, country_coords, alerts, forecast, wildfire_risk, gaia_agent, impact_report, worldbank_client, who_gho_client, shi_composite, geocoding, disasters, historical
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -238,20 +239,16 @@ def shi_global():
 
 @app.get("/shi")
 def get_shi(lat: float = Query(...), lon: float = Query(...)):
-    """Calculate point-specific Sustainability Health Index (SHI) using live data."""
+    """Point SHI from the real nearest-station AQI. None (not a placeholder)
+    when no valid AQI reading exists for this location."""
     live_env = mock_data.generate_environment_data(lat, lon)
     aqi = live_env["air_quality_index"]
-    
-    # SHI Calculation Logic (Matching friend's implementation)
-    shi = max(0, min(100, 100 - (aqi/3)))
-    grade = 'A' if shi >= 80 else ('B' if shi >= 60 else ('C' if shi >= 40 else 'D'))
-    risk = 'Healthy' if shi >= 80 else ('Moderate' if shi >= 50 else 'Poor')
-    
     return {
-        "shi": int(shi),
-        "grade": grade,
-        "risk": risk,
-        "aqi": aqi
+        **_compute_shi(aqi),
+        "aqi": aqi,
+        "data_source": live_env["data_source"],
+        "aqi_source": live_env.get("aqi_source"),
+        "reason": live_env.get("aqi_reason"),
     }
 
 @app.get("/wildfires")
@@ -298,16 +295,29 @@ def get_environment(lat: float = Query(...), lon: float = Query(...)):
     
     return {
         "location": {"lat": lat, "lon": lon},
-        "temperature_c": live_env["temperature_c"], # Real data from WAQI
-        "air_quality_index": live_env["air_quality_index"], # Real data from WAQI
+        # Model-based current temperature at the exact coordinates
+        # (Open-Meteo current=), NOT the nearest WAQI station's sensor.
+        "temperature_c": climate_info["current"]["temperature_c"],
+        "temperature_observation_time": climate_info["current"].get("observation_time"),
+        "temperature_data_source": climate_info["current"].get("data_source"),
+        "air_quality_index": live_env["air_quality_index"], # nearest WAQI station, or None
+        "data_source": live_env["data_source"],             # live_waqi | unavailable
+        "aqi_station": live_env.get("aqi_station"),
+        "aqi_source": live_env.get("aqi_source"),
+        "aqi_basis": live_env.get("aqi_basis"),
+        "aqi_observed_at": live_env.get("aqi_observed_at"),
+        "aqi_attempts": live_env.get("aqi_attempts"),
+        "aqi_reason": live_env.get("aqi_reason"),
         "co2_ppm": live_env["co2_ppm"],
         "rainfall_mm": climate_info["historical_trends"][-1]["total_rainfall_mm"],
         "anomaly_c": climate_info["current_anomaly"],
         "status": "success"
     }
 
-def _compute_shi(aqi: float) -> dict:
-    """Shared SHI formula (matches the existing /shi endpoint's logic)."""
+def _compute_shi(aqi) -> dict:
+    """Shared SHI formula. Returns shi=None when there is no real AQI."""
+    if aqi is None:
+        return {"shi": None, "grade": None, "risk": "No AQI data"}
     shi = max(0, min(100, 100 - (aqi / 3)))
     grade = 'A' if shi >= 80 else ('B' if shi >= 60 else ('C' if shi >= 40 else 'D'))
     risk = 'Healthy' if shi >= 80 else ('Moderate' if shi >= 50 else 'Poor')
@@ -344,7 +354,12 @@ def get_prediction(
     climate_info = climate.get_location_climate(lat, lon)
     live_env = mock_data.generate_environment_data(lat, lon)
 
-    current_temp_c = live_env["temperature_c"]
+    # Real current temperature (Open-Meteo); WAQI sensor only as a
+    # secondary real source; None if neither — the scenario engine then
+    # reports the warming DELTA without inventing a baseline.
+    current_temp_c = climate_info["current"]["temperature_c"]
+    if current_temp_c is None:
+        current_temp_c = live_env["temperature_c"]
     current_aqi = live_env["air_quality_index"]
     current_pm25 = live_env["pm25"]
     current_co2_ppm = live_env["co2_ppm"]
@@ -510,6 +525,111 @@ def get_air_quality_forecast(
 ):
     """Real multi-day AQI/PM2.5 forecast (Open-Meteo air quality model)."""
     return forecast.get_air_quality_forecast(lat, lon, days)
+
+
+@app.get("/disasters")
+def list_disasters(
+    days: Optional[int] = Query(30, ge=1, le=366),
+    start: Optional[str] = Query(None, description="YYYY-MM-DD (overrides days)"),
+    end: Optional[str] = Query(None, description="YYYY-MM-DD, default today"),
+    hazards: str = Query("flood,earthquake,tropical_cyclone,volcano,drought,wildfire,landslide"),
+    min_alert: str = Query("all", description="all | orange | red"),
+    eq_min_mag: float = Query(5.0, ge=4.0, le=8.0),
+):
+    """Natural hazards from GDACS (multi-hazard alerts) + USGS (earthquakes
+    and landslide-type seismic events), linked across sources. Each source's
+    status is reported separately; nothing is filled in when a source fails."""
+    from datetime import datetime as _dt, timedelta as _td, timezone as _tz
+    try:
+        end_dt = _dt.strptime(end, "%Y-%m-%d").replace(tzinfo=_tz.utc) if end else _dt.now(_tz.utc)
+        start_dt = (_dt.strptime(start, "%Y-%m-%d").replace(tzinfo=_tz.utc) if start
+                    else end_dt - _td(days=days or 30))
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Dates must be YYYY-MM-DD")
+    if start_dt > end_dt:
+        raise HTTPException(status_code=400, detail="start must be before end")
+    if min_alert not in ("all", "orange", "red"):
+        raise HTTPException(status_code=400, detail="min_alert must be all, orange or red")
+    return disasters.list_disasters(start_dt, end_dt, [h.strip() for h in hazards.split(",") if h.strip()],
+                                    min_alert, eq_min_mag)
+
+
+@app.get("/disasters/gdacs/{etype}/{eventid}")
+def gdacs_disaster_detail(etype: str, eventid: str):
+    if etype not in disasters.GDACS_TYPES or not eventid.isdigit():
+        raise HTTPException(status_code=400, detail="Unknown GDACS event")
+    return disasters.get_gdacs_detail(etype, eventid)
+
+
+@app.get("/disasters/gdacs/{etype}/{eventid}/geometry")
+def gdacs_disaster_geometry(etype: str, eventid: str, episodeid: Optional[int] = None):
+    if etype not in disasters.GDACS_TYPES or not eventid.isdigit():
+        raise HTTPException(status_code=400, detail="Unknown GDACS event")
+    return disasters.get_gdacs_geometry(etype, eventid, episodeid)
+
+
+@app.get("/disasters/usgs/{eventid}")
+def usgs_disaster_detail(eventid: str):
+    import re as _re
+    if not _re.fullmatch(r"[a-z0-9]{4,20}", eventid):
+        raise HTTPException(status_code=400, detail="Unknown USGS event")
+    return disasters.get_usgs_detail(eventid)
+
+
+@app.get("/historical/deadliest")
+def historical_deadliest(era: str = Query("since1900", description="since1900 | all")):
+    """Deadliest natural disasters: live NCEI data + small verified baseline,
+    with casualty ranges and per-figure sources. Events less than a year old
+    are listed as pending review, never ranked."""
+    if era not in ("since1900", "all"):
+        raise HTTPException(status_code=400, detail="era must be since1900 or all")
+    return historical.deadliest_response(era)
+
+
+@app.get("/historical/heatwaves")
+def historical_heatwaves():
+    """Heatwaves as a separate category: estimated excess / heat-attributable
+    deaths with study, method and uncertainty. Never mixed into Deadliest."""
+    return historical.heatwaves_response()
+
+
+@app.get("/historical/records")
+def historical_records():
+    """Record holders with strictly defined metrics (USGS, NCEI, WMO)."""
+    return historical.records_response()
+
+
+@app.get("/geocode")
+def geocode(q: str = Query(..., min_length=1, max_length=200)):
+    """All plausible matches for a place name (with district/state/country)
+    so same-named places can be told apart. Supports qualifiers:
+    'Aurangabad, Bihar'. Only called on submit (Nominatim policy)."""
+    return geocoding.search_places(q)
+
+
+@app.get("/geocode/suggest")
+def geocode_suggest(q: str = Query(..., min_length=1, max_length=200),
+                    limit: int = Query(6, ge=1, le=10)):
+    """Typeahead suggestions (Open-Meteo/GeoNames only — Nominatim is never
+    called per keystroke). Needs >= 3 characters of the place name."""
+    return geocoding.suggest_places(q, limit)
+
+
+@app.get("/reverse-geocode")
+def reverse_geocode(lat: float = Query(..., ge=-90, le=90), lon: float = Query(..., ge=-180, le=180)):
+    """Human-readable place name for clicked coordinates."""
+    return geocoding.reverse_geocode(lat, lon)
+
+
+@app.get("/rain-probability")
+def get_rain_probability(
+    lat: float = Query(..., ge=-90, le=90),
+    lon: float = Query(..., ge=-180, le=180),
+    days: int = Query(7, ge=1, le=16),
+):
+    """Real probability of precipitation (Open-Meteo NWP): next 24h hourly
+    plus daily max. Provenance FORECAST; missing values stay null."""
+    return forecast.get_rain_probability(lat, lon, days)
 
 
 @app.get("/wildfire-risk")

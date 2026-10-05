@@ -137,6 +137,37 @@ class ApiService {
         return this.get('/rainfall-history', { lat, lon });
     }
 
+    async getRainProbability(lat, lon, days = 7) {
+        return this.get('/rain-probability', { lat, lon, days });
+    }
+
+    // Place search with disambiguation (all matches + district/state/country)
+    async geocode(q) {
+        return this.get('/geocode', { q });
+    }
+
+    // Typeahead suggestions (Open-Meteo only, server-side). Separate from
+    // get() because it must be abortable: each keystroke cancels the
+    // previous in-flight request. Returns null on abort or any failure —
+    // suggestions are best-effort and never surface errors to the user.
+    async geocodeSuggest(q, signal, limit = 6) {
+        try {
+            const url = new URL(`${CONFIG.API_BASE_URL}/geocode/suggest`);
+            url.searchParams.append('q', q);
+            url.searchParams.append('limit', limit);
+            const response = await fetch(url, { signal });
+            if (!response.ok) return null;
+            return await response.json();
+        } catch (e) {
+            return null; // AbortError or network failure
+        }
+    }
+
+    // Human-readable place name for clicked coordinates
+    async reverseGeocode(lat, lon) {
+        return this.get('/reverse-geocode', { lat, lon });
+    }
+
     async getShiGlobal() {
         return this.get('/shi-global');
     }

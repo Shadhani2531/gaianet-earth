@@ -45,7 +45,8 @@ def generate_impact_report(lat: float, lon: float, nearby_reports: Optional[List
         climate_data = climate.get_location_climate(lat, lon)
         history = climate_data.get("historical_trends", [])
         latest = history[-1] if history else None
-        current["temperature_c"] = latest.get("avg_temp_c") if latest else None
+        current["temperature_c"] = (climate_data.get("current") or {}).get("temperature_c")
+        current["temperature_observation_time"] = (climate_data.get("current") or {}).get("observation_time")
         current["temperature_anomaly_c"] = climate_data.get("current_anomaly")
     except Exception:
         current["temperature_c"] = None

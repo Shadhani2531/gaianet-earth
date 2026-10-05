@@ -1,4 +1,13 @@
 class GlobeManager {
+    // Temperature-anomaly globe overlay: hidden until it uses a real
+    // climatology baseline (see the layer-temp change handler).
+    // Globe temperature heatmap: DROPPED (decision 5 Oct 2026). A real anomaly
+    // map needs a dense grid with 1991-2020 baselines, which the free API tier
+    // can't support; the 126-point version rendered as misleading discs. The
+    // Temperature toggle still drives the Insight card's exact point anomaly
+    // and the Temperature History chart.
+    static SHOW_TEMP_ANOMALY_RASTER = false;
+
     constructor() {
         if (CONFIG.CESIUM_ION_TOKEN) {
             Cesium.Ion.defaultAccessToken = CONFIG.CESIUM_ION_TOKEN;
@@ -138,6 +147,63 @@ class GlobeManager {
         document.addEventListener('reportSubmitted', (e) => {
             this.addReportEntity(e.detail);
         });
+    }
+
+    // Fly to a place the user picked from /geocode results. The chosen
+    // candidate's full label is remembered so the Insight card shows
+    // exactly which place this is (no reverse lookup needed).
+    flyToPlace(place) {
+        if (!place || place.lat === undefined || place.lon === undefined) return;
+        const altitudeByKind = {
+            country: 2500000, state: 900000, district: 300000, 'sub-district': 120000,
+            capital: 60000, city: 60000, town: 25000, village: 12000, hamlet: 8000,
+            locality: 12000, suburb: 12000, neighbourhood: 8000,
+        };
+        const altitude = altitudeByKind[place.kind] || 30000;
+        this._pendingPlace = place;
+        const destination = Cesium.Cartesian3.fromDegrees(place.lon, place.lat, altitude);
+        this.flyToDestination(destination, place.label || place.name);
+    }
+
+    // Pre-typeahead Enter search, split into "get results" and "fly", so the
+    // search bar can (a) use Ion's own top result exactly as before and
+    // (b) show a pick-list only when Ion itself returns several places with
+    // the exact requested name. Same geocoder, same query, same results
+    // order and same camera destination as _tryIonGeocode() below.
+    // Returns [] on failure/no results (caller then uses the old Nominatim
+    // fallback, searchLocationViaNominatim, unchanged).
+    async geocodeViaIon(query) {
+        try {
+            const geocoder = new Cesium.IonGeocoderService();
+            const results = await geocoder.geocode(query);
+            return (results || []).map((r) => {
+                let center;
+                if (r.destination instanceof Cesium.Rectangle) {
+                    center = Cesium.Rectangle.center(r.destination);
+                } else {
+                    center = Cesium.Cartographic.fromCartesian(r.destination);
+                }
+                return {
+                    label: r.displayName,
+                    name: (r.displayName || '').split(',')[0].trim(),
+                    destination: r.destination,
+                    lat: Cesium.Math.toDegrees(center.latitude),
+                    lon: Cesium.Math.toDegrees(center.longitude),
+                    source: 'Cesium ion geocoder',
+                };
+            });
+        } catch (error) {
+            console.error("Cesium Ion geocoding failed:", error);
+            return [];
+        }
+    }
+
+    // Fly to an Ion result exactly as the old search did (same destination
+    // object, so the same camera framing), remembering its label for the
+    // Insight header.
+    flyToIonResult(r) {
+        this._pendingPlace = { label: r.label, name: r.name, lat: r.lat, lon: r.lon, source: r.source };
+        this.flyToDestination(r.destination, r.label);
     }
 
     async searchLocation(query) {
@@ -410,6 +476,16 @@ class GlobeManager {
                 return;
             }
 
+            // Disasters tab: clicking a hazard marker opens its card;
+            // clicking empty globe does nothing (no location analytics
+            // panel exists on this tab).
+            if (activeTab === 'disasters') {
+                const picked = this.viewer.scene.pick(movement.position);
+                const ent = picked && (picked.id || picked.primitive?.id);
+                if (ent && ent._disasterGroupId) window.disastersManager?.selectGroup(ent._disasterGroupId);
+                return;
+            }
+
             const pickedObject = this.viewer.scene.pick(movement.position);
             
             if (Cesium.defined(pickedObject)) {
@@ -459,7 +535,10 @@ class GlobeManager {
         });
         document.getElementById('layer-temp').addEventListener('change', (e) => {
             AppState.setLayerActive('layer-temp', e.target.checked);
-            this.toggleTemperatureAnomalyRaster(e.target.checked);
+            // Globe overlay disabled (see SHOW_TEMP_ANOMALY_RASTER).
+            if (GlobeManager.SHOW_TEMP_ANOMALY_RASTER) {
+                this.toggleTemperatureAnomalyRaster(e.target.checked);
+            }
             // Immediately refresh the currently-open Insight card (if any)
             // rather than leaving it showing whatever it looked like at
             // the time of the last click — flipping this toggle with no
@@ -623,6 +702,22 @@ class GlobeManager {
             // object's fields from ui.js).
             AppState.setSelectedLocation(lat, lon);
 
+            // Place identity for the Insight header: the searched/picked
+            // candidate if we just flew to one, else a reverse lookup of
+            // the clicked coordinates. Token guards against a slow lookup
+            // for an earlier click overwriting a newer one.
+            const placeToken = (this._placeToken = (this._placeToken || 0) + 1);
+            const presetPlace = this._pendingPlace;
+            this._pendingPlace = null;
+            if (window.ui && window.ui.updatePlaceLabel) window.ui.updatePlaceLabel(null, lat, lon, true);
+            (presetPlace ? Promise.resolve({ ...presetPlace, status: 'ok' }) : api.reverseGeocode(lat, lon))
+                .then((place) => {
+                    if (placeToken === this._placeToken && window.ui && window.ui.updatePlaceLabel) {
+                        window.ui.updatePlaceLabel(place, lat, lon, false);
+                    }
+                })
+                .catch(() => {});
+
             // Screen 2: Top-Down Camera View (No Tilt as per User Request).
             // Preserve the user's EXACT current zoom level — no forced
             // zoom-out, no forced zoom-in. The previous version clamped a
@@ -720,7 +815,7 @@ class GlobeManager {
             // different upstream services (Open-Meteo, MODIS) than the
             // existing calls, so there's no shared rate limit to worry
             // about by running them concurrently.
-            const [forecastData, aqiForecastData, wildfireRiskData, ndviHistoryData, tempHistoryData, alertSummaryData, rainfallHistoryData, weatherConditionsData, aqiVerificationData] = await Promise.all([
+            const [forecastData, aqiForecastData, wildfireRiskData, ndviHistoryData, tempHistoryData, alertSummaryData, rainfallHistoryData, weatherConditionsData, aqiVerificationData, rainProbabilityData] = await Promise.all([
                 api.getWeatherForecast(lat, lon, 7),
                 api.getAirQualityForecast(lat, lon, 5),
                 api.getWildfireRisk(lat, lon),
@@ -743,6 +838,9 @@ class GlobeManager {
                 // Nearest-station AQI verification — only fetched when
                 // the Global Air Quality toggle is on.
                 openAqLayerOn ? api.getAqiVerification(lat, lon, 25) : Promise.resolve(null),
+                // Rain probability (PoP, Open-Meteo NWP) — gated by the
+                // same Rainfall (Precipitation) toggle as the history chart.
+                rainfallLayerOn ? api.getRainProbability(lat, lon, 7) : Promise.resolve(null),
             ]);
 
             if (ui) {
@@ -752,6 +850,7 @@ class GlobeManager {
                 ui.updateTempHistoryChart(tempHistoryData);
                 ui.updateWildfireInsightNode(wildfireRiskData, alertSummaryData);
                 ui.updateRainfallHistoryChart(rainfallHistoryData);
+                ui.updateRainProbabilityNode(rainProbabilityData);
                 ui.updateWeatherInsightNode(weatherConditionsData);
                 ui.updateWindInsightNode(weatherConditionsData);
                 ui.updateAqiVerificationNode(aqiVerificationData);
@@ -1024,6 +1123,7 @@ class GlobeManager {
     // distance short-circuit below).
     async toggleTemperatureAnomalyRaster(visible, offset = 0) {
         if (!visible) {
+            clearTimeout(this._tempHeatmapPoll);
             if (this.layers.temperatureAnomalyImagery) {
                 this.viewer.imageryLayers.remove(this.layers.temperatureAnomalyImagery);
                 this.layers.temperatureAnomalyImagery = null;
@@ -1032,12 +1132,46 @@ class GlobeManager {
         }
 
         const data = await api.getClimate();
+        const meta0 = (data && data.metadata) || {};
+        const layerStillOn = () => AppState.activeLayers && AppState.activeLayers.has('layer-temp');
+        // First build for today's window runs in the background on the
+        // server (paced to Open-Meteo's rate limits): show progress and
+        // check again, instead of reporting a failure.
+        if (data && meta0.status === 'building') {
+            const b = meta0.build || {};
+            const mins = Math.max(1, Math.round((b.eta_s || 0) / 60));
+            document.dispatchEvent(new CustomEvent('layerNotice', { detail: {
+                message: `Preparing this week's temperature heatmap (step ${b.done || 0} of ${b.total || 31}, about ${mins} min left). `
+                    + `It's built once a week and then loads instantly; the map will appear automatically. Click any place for its latest exact anomaly.` } }));
+            clearTimeout(this._tempHeatmapPoll);
+            this._tempHeatmapPoll = setTimeout(() => {
+                if (layerStillOn()) this.toggleTemperatureAnomalyRaster(true, offset);
+            }, 30000);
+            return;
+        }
+        if (data && meta0.status === 'error' && meta0.build && meta0.build.error) {
+            document.dispatchEvent(new CustomEvent('layerNotice', { detail: {
+                message: `The temperature heatmap could not be built: ${meta0.build.error}. It will retry the next time you turn the layer on.` } }));
+            return;
+        }
         if (!data || !data.features || data.features.length === 0) {
             const message = api.lastErrorKind === 'network'
                 ? `Could not reach the backend — check that the FastAPI server is running and reachable at ${CONFIG.API_BASE_URL}.`
                 : `The backend is running, but couldn't get real temperature data from its upstream source (Open-Meteo) right now — check the backend server's console log for the actual error, or try again in a minute.`;
             document.dispatchEvent(new CustomEvent('layerNotice', { detail: { message } }));
             return;
+        }
+
+        // Show the heatmap's actual date window in the legend.
+        const meta = data.metadata || {};
+        if (meta.window_start && meta.window_end && typeof UIManager !== 'undefined' && UIManager.LAYER_LEGEND_CONFIG['layer-temp']) {
+            const fmt = (d) => new Date(d + 'T00:00:00Z').toLocaleDateString(undefined, { day: 'numeric', month: 'short', timeZone: 'UTC' });
+            const weekly = (meta.window_type || '').startsWith('fixed');
+            UIManager.LAYER_LEGEND_CONFIG['layer-temp'].subLabel =
+                `${weekly ? 'Week' : '7 days'} ${fmt(meta.window_start)}–${fmt(meta.window_end)} vs 1991–2020 same days · ERA5`
+                + (weekly ? ' · weekly overview (click a place for its latest value)' : '')
+                + (meta.updating ? ' · newer week updating' : '');
+            window.ui?.renderDynamicLegend?.(AppState.activeLayers);
         }
 
         // Real (lat, lon, anomaly) tuples — this is the actual spatial
@@ -1176,6 +1310,13 @@ class GlobeManager {
             const layer = new Cesium.ImageryLayer(provider);
             this.viewer.imageryLayers.add(layer);
             this.layers.temperatureAnomalyImagery = layer;
+            // An older grid is showing while a newer week builds: refresh once it's ready.
+            clearTimeout(this._tempHeatmapPoll);
+            if ((data.metadata || {}).updating) {
+                this._tempHeatmapPoll = setTimeout(() => {
+                    if (AppState.activeLayers && AppState.activeLayers.has('layer-temp')) this.toggleTemperatureAnomalyRaster(true, offset);
+                }, 60000);
+            }
         } catch (e) {
             console.error('Failed to build temperature anomaly raster layer:', e);
         }

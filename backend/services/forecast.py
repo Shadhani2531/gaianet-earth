@@ -18,7 +18,7 @@ have an ML model" checkbox.
 
 import logging
 import requests
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict
 
 logger = logging.getLogger(__name__)
@@ -145,6 +145,93 @@ def get_air_quality_forecast(lat: float, lon: float, days: int = 5) -> Dict[str,
             "source": "Open-Meteo air quality forecast model",
             "status": "unavailable",
         }
+
+
+def get_rain_probability(lat: float, lon: float, days: int = 7) -> Dict[str, Any]:
+    """
+    Real probability of precipitation (PoP, %) from Open-Meteo's NWP
+    models: the next 24 hours hourly, plus the daily maximum for each of
+    the next `days` days.
+
+    Provenance is FORECAST, never LIVE — PoP is a model prediction, not a
+    measurement. Missing values stay None (the UI shows "not available")
+    and are never coerced to 0%, because "0% chance of rain" and "the
+    model gave no probability here" are very different statements.
+    """
+    days = max(1, min(days, MAX_WEATHER_DAYS))
+    base = {
+        "lat": lat, "lon": lon,
+        "source": "Open-Meteo NWP forecast",
+        "provenance": "FORECAST",
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+    }
+    try:
+        resp = requests.get(
+            _FORECAST_URL,
+            params={
+                "latitude": lat,
+                "longitude": lon,
+                "hourly": "precipitation_probability,precipitation",
+                "daily": "precipitation_probability_max,precipitation_sum",
+                "forecast_days": days,
+                "timezone": "auto",
+            },
+            timeout=10,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        hourly = data.get("hourly", {})
+        daily = data.get("daily", {})
+        h_times = hourly.get("time", [])
+
+        # Open-Meteo returns hourly data from LOCAL midnight of today, so
+        # the "next 24h" window has to start at the current LOCAL hour,
+        # not at index 0 (which would mostly show hours already past).
+        offset_s = data.get("utc_offset_seconds", 0) or 0
+        local_now = datetime.now(timezone.utc) + timedelta(seconds=offset_s)
+        current_hour = local_now.strftime("%Y-%m-%dT%H:00")
+        start = 0
+        for i, ts in enumerate(h_times):
+            if ts >= current_hour:
+                start = i
+                break
+
+        next_24h = []
+        for i in range(start, min(start + 24, len(h_times))):
+            next_24h.append({
+                "time": h_times[i],
+                "probability_pct": _at(hourly, "precipitation_probability", i),
+                "precipitation_mm": _at(hourly, "precipitation", i),
+            })
+
+        daily_out = []
+        for i, date in enumerate(daily.get("time", [])):
+            daily_out.append({
+                "date": date,
+                "probability_max_pct": _at(daily, "precipitation_probability_max", i),
+                "precipitation_sum_mm": _at(daily, "precipitation_sum", i),
+            })
+
+        hourly_vals = [h["probability_pct"] for h in next_24h if h["probability_pct"] is not None]
+        has_any = bool(hourly_vals) or any(d["probability_max_pct"] is not None for d in daily_out)
+
+        return {
+            **base,
+            "timezone": data.get("timezone"),
+            "local_time": current_hour,
+            "today_max_pct": daily_out[0]["probability_max_pct"] if daily_out else None,
+            "next_24h_max_pct": max(hourly_vals) if hourly_vals else None,
+            "next_24h": next_24h,
+            "daily": daily_out,
+            # "live" = request succeeded and the model returned PoP values.
+            # "no_probability" = request succeeded, but this location/model
+            # has no PoP field — an honest "not available", not 0%.
+            "status": "live" if has_any else "no_probability",
+        }
+    except Exception as e:
+        logger.warning(f"Rain probability fetch failed for ({lat},{lon}): {e}")
+        return {**base, "today_max_pct": None, "next_24h_max_pct": None,
+                "next_24h": [], "daily": [], "status": "unavailable"}
 
 
 def _at(series: Dict[str, list], key: str, i: int):

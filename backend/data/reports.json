@@ -1,0 +1,11 @@
+[
+  {
+    "id": "e9ac40e5-1263-4137-a94e-80a40974a2af",
+    "lat": 40.7128,
+    "lon": -74.006,
+    "category": "Air Quality Concern",
+    "description": "Test report from automated backend check",
+    "reporter_name": "tester",
+    "created_at": "2026-07-30T18:51:33.716996"
+  }
+]

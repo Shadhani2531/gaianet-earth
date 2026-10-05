@@ -1,5 +1,8 @@
 import random
+import json
 import logging
+from pathlib import Path
+import threading
 import math
 import requests
 from datetime import datetime, timedelta, timezone
@@ -44,7 +47,7 @@ def get_live_climate_trends(lat: float, lon: float, months_back: int = 6) -> tup
     end_date = (datetime.now() - timedelta(days=5)).strftime('%Y-%m-%d')
     start_date = (datetime.now() - timedelta(days=30 * months_back)).strftime('%Y-%m-%d')
     
-    url = f"https://archive-api.open-meteo.com/v1/archive?latitude={lat}&longitude={lon}&start_date={start_date}&end_date={end_date}&daily=temperature_2m_max,precipitation_sum&timezone=GMT"
+    url = f"https://archive-api.open-meteo.com/v1/archive?latitude={lat}&longitude={lon}&start_date={start_date}&end_date={end_date}&daily=temperature_2m_mean,precipitation_sum&timezone=GMT"
     
     try:
         logger.info(f"Fetching Open-Meteo data for {lat},{lon}")
@@ -59,7 +62,7 @@ def get_live_climate_trends(lat: float, lon: float, months_back: int = 6) -> tup
         
         daily = data.get('daily', {})
         times = daily.get('time', [])
-        temps = daily.get('temperature_2m_max', [])
+        temps = daily.get('temperature_2m_mean', [])
         precip = daily.get('precipitation_sum', [])
         
         # Group by month
@@ -67,7 +70,9 @@ def get_live_climate_trends(lat: float, lon: float, months_back: int = 6) -> tup
         for i in range(len(times)):
             month_key = times[i][:7] # YYYY-MM
             if month_key not in monthly_stats:
-                monthly_stats[month_key] = {"temps": [], "precip": 0.0}
+                monthly_stats[month_key] = {"temps": [], "precip": 0.0, "last_date": None}
+            if i < len(precip) and precip[i] is not None:
+                monthly_stats[month_key]["last_date"] = times[i]
             
             if i < len(temps) and temps[i] is not None:
                 val = temps[i]
@@ -85,7 +90,10 @@ def get_live_climate_trends(lat: float, lon: float, months_back: int = 6) -> tup
             history.append({
                 "month": month,
                 "avg_temp_c": round(float(avg_temp), 1),
-                "total_rainfall_mm": round(float(monthly_stats[month]["precip"]), 1)
+                "total_rainfall_mm": round(float(monthly_stats[month]["precip"]), 1),
+                # Last day actually covered by the archive (it lags ~5
+                # days), so the UI can label a partial month honestly.
+                "data_through": monthly_stats[month]["last_date"],
             })
             
         return history, True
@@ -178,31 +186,117 @@ def _fetch_global_grid_conditions() -> Optional[Dict[str, Any]]:
         return None
 
 
-def get_climate_geojson() -> Dict[str, Any]:
-    grid = _fetch_global_grid_conditions()
-    if not grid:
-        return {"type": "FeatureCollection", "features": [],
-                "metadata": {"source": "Open-Meteo", "status": "unavailable"}}
+# Heatmap grid: an overall relative picture, so it uses a FIXED
+# Monday-Sunday week and is rebuilt only ONCE A WEEK (the Insight card keeps
+# the latest rolling 7 days for accuracy — same calculation, different
+# window). Built in the BACKGROUND, paced to stay under Open-Meteo's
+# free-tier limits (600 calls/min; a 126-location request counts as 126
+# calls). The last completed grid is saved to disk and served immediately.
+GRID_PACE_S = 20.0                      # one 126-point request / 20 s ~= 380 calls/min
+# Heatmap dropped (5 Oct 2026): never start the ~3,900-call weekly build.
+# The code is kept in case a paid API tier makes a dense grid feasible.
+HEATMAP_ENABLED = False
+_GRID_FILE = Path(__file__).resolve().parents[1] / "data" / "anomaly_baseline_cache" / "heatmap_grid.json"
+_grid_state: Dict[str, Any] = {"running": False, "done": 0, "total": 31, "error": None, "started": None}
+_grid_lock = threading.Lock()
 
-    month_idx = grid["fetched_at"].month
-    features = []
-    for r in grid["readings"]:
-        baseline = _expected_seasonal_temp(r["lat"], month_idx)
-        anomaly = round(r["temp"] - baseline, 2)
-        features.append({
-            "type": "Feature",
-            "geometry": {"type": "Point", "coordinates": [float(r["lon"]), float(r["lat"])]},
-            "properties": {"value": float(anomaly), "type": "climate", "data_source": "real_openmeteo"}
+
+def _load_grid() -> Optional[Dict[str, Any]]:
+    try:
+        with open(_GRID_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return None
+
+
+def _save_grid(grid: Dict[str, Any]) -> None:
+    try:
+        _GRID_FILE.parent.mkdir(parents=True, exist_ok=True)
+        tmp = _GRID_FILE.with_suffix(".tmp")
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(grid, f)
+        tmp.replace(_GRID_FILE)
+    except OSError as e:
+        logger.warning(f"Could not save heatmap grid: {e}")
+
+
+def _build_grid(compute=None) -> None:
+    """Runs in a background thread. Same method as the Insight card."""
+    from services import current_conditions
+    compute = compute or current_conditions.compute_anomalies
+    points = [(float(lat), float(lon)) for lat, lon in _build_grid_points()]
+
+    def progress(done, total):
+        _grid_state.update({"done": done, "total": total})
+
+    try:
+        week_end = current_conditions.last_complete_week_end()
+        results = compute(points, pace_s=GRID_PACE_S, progress=progress, window_end=week_end)
+        features, windows = [], set()
+        for (lat, lon), r in zip(points, results):
+            if r.get("status") != "ok":
+                continue
+            windows.add((r["window_start"], r["window_end"]))
+            features.append({
+                "type": "Feature",
+                "geometry": {"type": "Point", "coordinates": [lon, lat]},
+                "properties": {"value": float(r["anomaly_c"]), "type": "climate",
+                               "data_source": "derived_real_openmeteo"},
+            })
+        if len(features) < len(points) * 0.5:
+            reasons = sorted({r.get("reason", "") for r in results if r.get("status") != "ok"})
+            raise RuntimeError(f"only {len(features)}/{len(points)} cells computed ({'; '.join(reasons)[:200]})")
+        w = sorted(windows)
+        _save_grid({
+            "type": "FeatureCollection",
+            "features": features,
+            "metadata": {
+                "source": "Open-Meteo historical archive (ERA5-based reanalysis), same dataset both sides",
+                "method": results[0].get("method"),
+                "baseline_period": "1991-2020",
+                "window_start": w[0][0], "window_end": w[-1][1],
+                "requested_end": week_end.isoformat(),
+                "window_type": "fixed Monday-Sunday week, rebuilt weekly",
+                "points_ok": len(features), "points_total": len(points),
+                "built_at": datetime.now(timezone.utc).isoformat(),
+            },
         })
+        _grid_state["error"] = None
+    except Exception as e:
+        logger.error(f"Heatmap grid build failed: {e}")
+        _grid_state["error"] = str(e)[:300]
+    finally:
+        _grid_state["running"] = False
 
-    return {
-        "type": "FeatureCollection",
-        "features": features,
-        "metadata": {
-            "source": "Open-Meteo (real current temperature); anomaly computed against a documented latitude/season baseline model — the temperature itself is real, the baseline is a transparent model, never a random value",
-            "timestamp": grid["fetched_at"].isoformat()
-        }
-    }
+
+def _expected_requested_end() -> str:
+    from services import current_conditions
+    return current_conditions.last_complete_week_end().isoformat()
+
+
+def get_climate_geojson(start_build: bool = True) -> Dict[str, Any]:
+    """Temperature-anomaly heatmap: EXACTLY the Insight card's method
+    (current_conditions.compute_anomalies) on a 126-point grid. Returns the
+    last completed grid at once; starts a background rebuild when a newer
+    complete week is available (so at most once a week). Never blocks on
+    Open-Meteo."""
+    grid = _load_grid()
+    stale = not grid or (grid.get("metadata", {}).get("requested_end") or "") < _expected_requested_end()
+    with _grid_lock:
+        if stale and start_build and HEATMAP_ENABLED and not _grid_state["running"]:
+            _grid_state.update({"running": True, "done": 0, "error": None,
+                                "started": datetime.now(timezone.utc).isoformat()})
+            threading.Thread(target=_build_grid, daemon=True, name="heatmap-grid").start()
+    building = {"running": _grid_state["running"], "done": _grid_state["done"], "total": _grid_state["total"],
+                "eta_s": int(max(0, _grid_state["total"] - _grid_state["done"]) * GRID_PACE_S),
+                "error": _grid_state["error"]}
+    if grid:
+        grid = dict(grid)
+        grid["metadata"] = {**grid["metadata"], "status": "ok", "updating": building["running"], "build": building}
+        return grid
+    return {"type": "FeatureCollection", "features": [],
+            "metadata": {"status": "error" if building["error"] and not building["running"] else "building",
+                         "build": building, "source": "Open-Meteo archive (ERA5)"}}
 
 
 # Fixed reference years — same as Temperature/Vegetation History, for a
@@ -327,28 +421,40 @@ def get_rainfall_history(lat: float, lon: float) -> Dict[str, Any]:
 
 
 def get_location_climate(lat: float, lon: float) -> Dict[str, Any]:
-    """Provides time-series data using live Open-Meteo data."""
-    history, is_real = get_live_climate_trends(lat, lon)
+    """
+    Monthly history (archive) + REAL current temperature + REAL anomaly.
 
-    # Anomaly = real current temperature vs. a climatological baseline for
-    # this latitude and month — the same _expected_seasonal_temp() model
-    # get_climate_geojson() (the map layer) already uses. This used to
-    # compare against a naive 6-month rolling average instead, which
-    # mostly just measures the ordinary seasonal cycle rather than a real
-    # anomaly: a summer reading compared against a 6-month average that
-    # includes winter months produces a large number that isn't unusual
-    # at all, just seasonal. Fixed to use the real baseline model so this
-    # stat and the map layer's anomaly mean the same thing.
-    current_temp = float(history[-1]["avg_temp_c"]) if history and history[-1]["avg_temp_c"] != 0 else 20.0
-    current_month = datetime.now(timezone.utc).month
-    baseline = _expected_seasonal_temp(lat, current_month)
-    anomaly = round(current_temp - baseline, 2)
+    - historical_trends: monthly summaries (avg of daily MAX temperature,
+      total rainfall) — kept for the charts; NOT the current temperature.
+    - current: model-based current conditions at the exact coordinates
+      (see services/current_conditions.py). This is what the Insight
+      "Temperature" stat shows, matching how weather apps work.
+    - current_anomaly: recent 7-day mean vs the 1991-2020 mean for the
+      same calendar days, both from the same reanalysis archive. Replaces
+      the old comparison of a monthly mean of daily MAXIMA against a
+      latitude/season formula (which produced e.g. +13 C for Nagpur).
+      None when it can't be computed — never a placeholder.
+    The three upstream calls run in parallel.
+    """
+    from services import current_conditions
+
+    with ThreadPoolExecutor(max_workers=3) as pool:
+        f_hist = pool.submit(get_live_climate_trends, lat, lon)
+        f_cur = pool.submit(current_conditions.get_current_temperature, lat, lon)
+        f_anom = pool.submit(current_conditions.get_temperature_anomaly, lat, lon)
+        history, is_real = f_hist.result()
+        current = f_cur.result()
+        anomaly = f_anom.result()
 
     return {
         "location": {"lat": lat, "lon": lon},
         "historical_trends": history,
-        "current_anomaly": float(anomaly),
+        "current": current,
+        "current_anomaly": anomaly.get("anomaly_c"),
+        "anomaly": anomaly,
         "source": "Open-Meteo Live API" if is_real else "Estimated (Open-Meteo unavailable — seasonal/latitude model used instead)",
+        # data_source describes historical_trends only; current and
+        # anomaly carry their own data_source fields.
         "data_source": "real_openmeteo" if is_real else "estimated_fallback"
     }
 
@@ -368,7 +474,8 @@ def get_temperature_history(lat: float, lon: float) -> Dict[str, Any]:
     Real historical temperature at (lat, lon) for _TEMP_HISTORY_REFERENCE_
     YEARS plus the current year, each matched to the SAME ~7-day window
     around today's month/day (so a summer year isn't compared to a winter
-    one). Each year's value is the real average of temperature_2m_max
+    one). Each year's value is the real average of temperature_2m_mean (daily MEAN —
+    the same quantity as the anomaly and the monthly chart)
     across that window from Open-Meteo's archive API (ERA5 reanalysis) —
     or explicitly "unavailable" if the request fails/returns no valid
     days, never fabricated or interpolated. Cached per location for
@@ -415,13 +522,13 @@ def get_temperature_history(lat: float, lon: float) -> Dict[str, Any]:
                 f"?latitude={lat}&longitude={lon}"
                 f"&start_date={window_start.strftime('%Y-%m-%d')}"
                 f"&end_date={window_end.strftime('%Y-%m-%d')}"
-                f"&daily=temperature_2m_max&timezone=GMT"
+                f"&daily=temperature_2m_mean&timezone=GMT"
             )
             resp = requests.get(url, timeout=10)
             logger.info(f"Temp history: year {year} window {window_start.date()}..{window_end.date()} -> HTTP {resp.status_code}")
             resp.raise_for_status()
             data = resp.json()
-            temps = [t for t in data.get("daily", {}).get("temperature_2m_max", []) if t is not None]
+            temps = [t for t in data.get("daily", {}).get("temperature_2m_mean", []) if t is not None]
 
             if not temps:
                 logger.info(f"Temp history: year {year} returned no valid daily values for ({lat},{lon})")

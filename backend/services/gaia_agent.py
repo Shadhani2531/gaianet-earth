@@ -54,21 +54,51 @@ def is_configured() -> bool:
 # no new upstream integrations introduced here ---
 
 def _geocode_location(place_name: str) -> Dict[str, Any]:
-    """Real geocoding via Open-Meteo's own geocoding API — same provider
-    already used for weather/AQI forecasts elsewhere in this backend, so
-    no new upstream dependency is introduced just for chat."""
+    """Real geocoding with disambiguation (services/geocoding.py).
+
+    Coordinates are returned ONLY for a place whose name EXACTLY matches
+    the requested name (case-insensitive; accents NOT folded, so "Bhokāra"
+    is not "Bhokara"). Same rule the search bar now follows:
+      - exactly one exact match   -> its coordinates
+      - several exact matches     -> no coordinates; Gaia must ask which one
+      - no exact match            -> no coordinates; Gaia must say so and may
+                                     offer the near-spellings as questions,
+                                     never answer for one of them
+    Previously this fell back to candidates[0], so "Bhokara" could silently
+    resolve to "Bhokra" — the same near-spelling bug fixed in search.
+    (Matches within 15 km of each other are already merged as one place.)
+    """
+    from services import geocoding
     try:
-        resp = requests.get(_GEOCODE_URL, params={"name": place_name, "count": 1}, timeout=8)
-        resp.raise_for_status()
-        results = resp.json().get("results")
-        if not results:
-            return {"error": f"Could not find a location matching '{place_name}'."}
-        r = results[0]
-        name_parts = [r.get("name"), r.get("admin1"), r.get("country")]
+        res = geocoding.search_places(place_name)
+        cands = res.get("candidates") or []
+        if res.get("status") == "unavailable":
+            return {"error": "Geocoding service unavailable right now."}
+        exact = [c for c in cands if c.get("exact")]
+
+        if len(exact) == 1:
+            top = exact[0]
+            return {"lat": top["lat"], "lon": top["lon"], "display_name": top["label"]}
+
+        if len(exact) > 1:
+            return {
+                "ambiguous": True,
+                "options": [c["label"] for c in exact][:6],
+                "instruction": ("Several different places share this exact name. Do NOT pick one "
+                                "and do NOT call any other tool for it yet. Ask the user which one "
+                                "they mean, listing these options, and suggest replying like "
+                                "'Name, State'."),
+            }
+
         return {
-            "lat": r["latitude"],
-            "lon": r["longitude"],
-            "display_name": ", ".join(p for p in name_parts if p),
+            "exact_match_found": False,
+            "requested_name": res.get("name") or place_name,
+            "similar_names": [c["label"] for c in cands][:4],
+            "instruction": ("No place with exactly this name was found. Do NOT answer for any of "
+                            "the similar names and do NOT guess coordinates. Tell the user you "
+                            "couldn't find that exact place; if similar names exist, ask whether "
+                            "they meant one of them, or suggest selecting the spot on the map "
+                            "(then ask about 'here')."),
         }
     except Exception as e:
         logger.warning(f"Gaia geocode failed for '{place_name}': {e}")
@@ -84,7 +114,8 @@ def _get_current_snapshot(lat: float, lon: float, radius_km: float = 50.0) -> Di
         climate_data = climate.get_location_climate(lat, lon)
         history = climate_data.get("historical_trends", [])
         latest = history[-1] if history else None
-        result["temperature_c"] = latest.get("avg_temp_c") if latest else None
+        result["temperature_c"] = (climate_data.get("current") or {}).get("temperature_c")
+        result["temperature_observation_time"] = (climate_data.get("current") or {}).get("observation_time")
         result["temperature_anomaly_c"] = climate_data.get("current_anomaly")
     except Exception as e:
         logger.warning(f"Gaia snapshot: climate lookup failed: {e}")
@@ -117,7 +148,7 @@ _TOOLS = [
             "description": "Convert a place name (city, region, landmark) into latitude/longitude. Call this first whenever the user names a place rather than giving coordinates or referring to 'here'/'this location'.",
             "parameters": {
                 "type": "object",
-                "properties": {"place_name": {"type": "string", "description": "e.g. 'Nagpur', 'Nagpur, India'"}},
+                "properties": {"place_name": {"type": "string", "description": "e.g. 'Nagpur', 'Aurangabad, Bihar', 'Springfield, Illinois' — include state/country when the user gave it"}},
                 "required": ["place_name"],
             },
         },
@@ -188,7 +219,7 @@ SYSTEM_PROMPT = """You are Gaia, the conversational assistant built into GaiaNet
 
 Rules you must follow:
 1. Never guess or estimate a number (temperature, AQI, fire risk, forecast) yourself. Always call the relevant tool to get the real value before answering a question that needs one.
-2. If the user names a place, call geocode_location first to get coordinates, unless coordinates were already given to you as the user's currently-selected map location.
+2. If the user names a place, call geocode_location first to get coordinates, unless coordinates were already given to you as the user's currently-selected map location. If geocode_location returns "ambiguous": true, several real places share that name — do NOT choose one; ask the user which they mean, listing the options it returned, and suggest replying like "Aurangabad, Bihar". If it returns "exact_match_found": false, say you couldn't find that exact place — never answer for a similar-sounding place and never invent coordinates; you may ask whether they meant one of the similar names, or suggest selecting the spot on the map. Always state the full place name (with state/country) you answered for.
 3. If a tool returns an error or an "unavailable"/null value, say so honestly in plain language ("I couldn't get live air quality data for that spot right now") — never substitute a plausible-sounding made-up number.
 4. get_wildfire_risk is a documented rule-based formula, not a trained ML model — if asked how it works, say that plainly.
 5. Keep answers short, plain-language, and directly useful for a real decision (e.g. "should I go outside", "should I reschedule an outdoor event"). Avoid dumping raw JSON at the user.

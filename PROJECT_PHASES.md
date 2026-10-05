@@ -1,70 +1,64 @@
-# GaiaNet Earth - Project Phases Status
+# GaiaNet Earth — Phases & Checklist
 
-This document tracks feature-level progress. It's kept in sync with `PROJECT_STATUS.md` (the authoritative current-state doc) rather than duplicating its data table — this file is the checklist view, that one is the detail view.
-
----
-
-## Current Navigation (5 tabs live; 1 disabled)
-
-### 🌍 Tab: Immersive Earth
-- [x] Core Planet Rendering (CesiumJS)
-- [x] Real-time Fire Points (NASA FIRMS)
-- [x] Auto-rotating cinematic default view
-- [ ] Dynamic Atmosphere (night-lights, cloud layers) — not started
-
-### 📍 Tab: Location Insight
-- [x] Coordinate Targeting (click anywhere on globe, or search)
-- [x] Real Environmental Stats (climate, AQI, CO₂, NDVI)
-- [x] Dynamic Charts
-- [x] Localized Risk Score (SHI, disclosed formula)
-
-### ⏳ Historical Timeline / "Temporal Engine" — **DISABLED, not a live tab**
-- [x] Timeline UI component and slider logic exist in `js/ui.js` (`case 'temporal':`)
-- [x] Historical imagery date range plumbing exists
-- [ ] **Not reachable from navigation** — removed from `index.html`'s tab dock because the imagery-layer state didn't settle correctly on tab entry (see the comment directly above the nav markup in `index.html`). This needs a proper state-machine fix, not another patch, before it's re-added to the visible nav. Do not describe this as shipped until it's actually back in the tab bar and has been manually verified to load historical imagery correctly on every entry.
-
-### 🧠 Tab: Prediction / Forecast Lab
-- [x] Real multi-day weather + AQI forecasts (Open-Meteo NWP — not a custom-trained model, see `PROJECT_OVERVIEW.md` §4)
-- [x] Rule-based wildfire-risk score (documented formula, not ML — see `wildfire_risk.py`)
-- [x] Cited "what-if" scenario simulator (deforestation/emissions, real coefficients)
-- [ ] Probabilistic heatmaps (drought/flood chance) — not started
-- [ ] A genuinely trained ML model for any of the above — intentionally not built; would require real historical training data this project doesn't have. See `PROJECT_OVERVIEW.md` §4 for why this isn't on the roadmap as a near-term item.
-
-### 🚀 Tab: Community Reports
-- [x] Right-click citizen incident reporting
-- [x] Satellite (NASA FIRMS) cross-confirmation for fire-type reports
-- [x] SQLite persistence
-
-### 🌐 Tab: Global Health Index
-- [x] Country-level composite SHI (real OpenAQ + Open-Meteo + MODIS)
-- [x] Per-country transparency on which real components contributed
-- [ ] Full country coverage — currently ~90 countries with a capital-coordinate reference; the rest get an AQI-only score or no score
+The checklist view of the project. Details per data layer live in [`PROJECT_STATUS.md`](PROJECT_STATUS.md).
 
 ---
 
-## Strategic Recommendations & Add-ons (not yet built — genuine roadmap, not shipped claims)
+## Completed
 
-### 1. Trust & Transparency (highest priority — see full audit for rationale)
-- Surface the `data_source`/`confidence` fields the backend already returns as visible UI badges — this is currently computed end-to-end but stops at the API response.
-- Add a visible "simulated" indicator when the Atmospheric Sync weather effect is running on its deterministic mock (no `OPENWEATHERMAP_API_KEY` configured).
+### Phase 1 — Visualisation ✅
+- [x] CesiumJS globe, live NASA GIBS imagery, auto-rotate
+- [x] Tabbed single-page UI (8 tabs), Docker support
 
-### 2. Historical Timeline Rebuild
-- Fix the imagery-layer state bug and re-enable the tab (see above).
+### Phase 2 — Real data layers ✅
+- [x] Wildfires (NASA FIRMS), NDVI (MODIS), CO₂ (NOAA), climate (Open-Meteo)
+- [x] Air quality chain: WAQI → OpenAQ → CAMS model, with the source named
+- [x] Historical Timeline rebuilt on NASA Worldview snapshots (off-globe)
 
-### 3. Predictive Intelligence (real, not fabricated)
-- If/when a historical per-region time-series store exists, evaluate a real regional forecasting model as a *complement* to the existing Open-Meteo forecast — never as a "trained model" claim without actual training data.
-- Anomaly detection on already-fetched real historical series (statistically simple, e.g. z-score/STL — doesn't require new data).
+### Phase 3 — Forecasting & simulation ✅
+- [x] 7-day weather and 5-day AQI forecasts (Open-Meteo NWP), with dates
+- [x] Rule-based wildfire-risk score
+- [x] Cited what-if scenario simulator
+- [x] Ask Gaia, grounded in this backend's own endpoints
 
-### 4. User Experience & Collaboration
-- Minimum-viable responsive/mobile layout (currently effectively desktop-only).
-- Basic accessibility pass (keyboard navigation, ARIA labeling).
-- "Save Location" monitoring bookmarks.
-- Shareable snapshot URLs (camera position + active layers).
+### Phase 4 — Accuracy & trust (seminar feedback round) ✅
+- [x] Rain probability (next 24 h + 7 days)
+- [x] Temperature matches weather apps: live current value + anomaly vs a real 1991–2020 baseline (not a formula)
+- [x] One consistent temperature definition across all tabs (daily mean for history and anomaly)
+- [x] Same-name place disambiguation; Enter never replaces the typed name; suggestions only on explicit selection
+- [x] Ask Gaia lists ambiguous places instead of guessing
+- [x] Source/date badges: LIVE, ARCHIVE, FORECAST, EST, FORMULA
+- [x] Offline test suite (101 tests)
 
-### 5. Data Depth & Export
-- Broaden `country_coords.py` coverage.
-- ESA Sentinel / Copernicus CAMS as additional real data sources.
-- Raw GeoJSON/CSV export.
+### Phase 5 — Disasters & Hazards ✅
+- [x] Active now (source status + end dates) and Previous (7 / 30 days / custom)
+- [x] GDACS + USGS with cross-source linking and audited de-duplication
+- [x] Significant events by default; low-impact behind Filters; clustering; far-side markers hidden
+- [x] Historical Extremes: Deadliest (since 1900 / all history), Heatwaves, Record holders
+- [x] Casualty ranges with per-figure sources; ≈ for overlapping ranks; possible duplicates flagged; preliminary figures never promoted
+- [x] Nepal 26 Aug 2026 (Rasuwa / Bhote Koshi) kept as an automated test case
 
 ---
-*This file reflects the current `main` branch. Update it in the same PR as any code change that adds/removes/disables a feature — the previous version of this document described the Temporal tab as shipped for months after it was actually disabled, which is exactly the kind of drift this note is here to prevent.*
+
+## Next
+
+### Disasters — Phase 2
+- [ ] Search integration (e.g. "Nepal flood")
+- [ ] "Nearby events" line on the Insight card
+- [ ] Ask Gaia disasters tool
+- [ ] Copernicus EMS flood extents (real mapped extent, not the analyst-drawn area)
+
+### Disasters — Phase 3
+- [ ] ReliefWeb reports (after app-name approval)
+
+### Platform
+- [ ] AR/VR model of Earth for Android devices (faculty request; AR preferred)
+- [ ] Mobile layout and accessibility pass
+- [ ] CI to run the test suite automatically
+- [ ] Broader Global Health Index coverage
+
+### Deliberately not planned
+- Trained ML forecasting/classification without real labelled history
+- Globe temperature heatmap on the free API tier
+- Costliest-disaster record without an open authoritative dataset
+- Drought/famine and epidemic rankings

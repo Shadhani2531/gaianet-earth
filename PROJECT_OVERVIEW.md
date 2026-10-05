@@ -1,47 +1,55 @@
-# GaiaNet Earth: Environmental Decision-Support Dashboard
+# GaiaNet Earth — Project Overview
 
-## 1. Project Vision
-GaiaNet Earth is a single-page, portfolio-scale environmental intelligence dashboard: a CesiumJS globe combining several real, live data sources with a couple of genuinely differentiated features — a cited "what-if" climate scenario simulator and a grounded LLM assistant. It's built around one core discipline, applied consistently across the backend: **never present a fabricated number as if it were measured, and always say how confident a derived number actually is.**
+## 1. Vision
+GaiaNet Earth is a single-page environmental-intelligence dashboard built on a CesiumJS globe. It combines many real, live data sources with three differentiated features: a cited what-if scenario simulator, a grounded LLM assistant, and a Disasters & Hazards section that links live hazard feeds with sourced historical context.
 
-It is *not* an autonomous monitoring system, a digital twin in the full simulation sense, or an AI-model-driven forecaster — see Section 4 below for exactly what "AI" does and doesn't mean in this codebase, and `PROJECT_STATUS.md` for the full real/estimated/derived breakdown per feature.
+The project is built around one discipline, applied everywhere: **never present a fabricated number as if it were measured; always state the source, the date and the uncertainty.**
 
-## 2. Core Objectives & Capabilities
-- **Unified Earth View**: an interactive 3D globe (CesiumJS) layering several real environmental datasets — wildfires, air quality, vegetation, climate — into one view.
-- **Point-Level Analysis**: click anywhere for real climate history, current AQI/temperature/CO₂, NDVI, and short-term forecasts at that exact location.
-- **Sustainability Health Index (SHI)**: a disclosed, non-black-box composite score combining real air-quality, climate-stability, and vegetation components, at both a point and country level.
-- **Cited Scenario Simulation**: a "what-if" tool that projects deforestation/emissions effects using real, individually cited climate-science coefficients applied to a location's real current data — not a trained model, and not guessed constants either.
+## 2. Capabilities
+- **Point analysis** — click or search any place for live temperature, the anomaly against its own 1991–2020 baseline, air quality, CO₂, rainfall, rain probability, NDVI and history charts.
+- **Same-name place handling** — "Aurangabad" lists every match instead of silently picking one; Enter always resolves to exactly what was typed.
+- **Forecasts** — 7-day weather, 5-day air quality and 7-day rain probability, each labelled with its date.
+- **Hazards** — active and recent events from GDACS and USGS, linked across sources, with impacts shown side by side and never summed.
+- **Historical context** — the deadliest disasters (since 1900 or all recorded history), heatwaves (estimated excess deaths) and record holders, each with ranges and sources.
+- **Composite indices** — a disclosed Sustainability Health Index at point and country level.
+- **What-if simulation** — deforestation/emissions projections using cited, published coefficients.
 
-## 3. The 5-Tab Structure (current)
-1. **Immersive Earth** — 3D globe with live satellite imagery and auto-rotate.
-2. **Location Insight** — Point-specific analytics: real-time AQI, temperature, CO₂, NDVI, forecasts.
-3. **Prediction / Forecast Lab** — Real multi-day forecasts, the wildfire-risk formula, and the what-if simulator.
-4. **Community Reports** — Citizen incident reporting, cross-checked against real satellite wildfire data.
-5. **Global Health Index** — Country-level composite SHI.
+## 3. The eight tabs
+1. **Immersive Earth** — globe with live NASA GIBS imagery.
+2. **Climate Insight** — point analytics (see above).
+3. **Historical Timeline** — NASA Worldview snapshots, 2000–present, with split compare.
+4. **Forecast Lab** — forecasts, wildfire-risk score, what-if simulator.
+5. **Community Reports** — citizen reports, cross-checked against NASA FIRMS.
+6. **Global Health Index** — country-level composite SHI.
+7. **Disasters & Hazards** — Active now · Previous · Historical Extremes.
+8. **Ask Gaia** — grounded assistant.
 
-*(A 6th tab, a historical-imagery time slider, existed in an earlier version and is currently disabled pending a rebuild — see `PROJECT_STATUS.md` for the specifics and why it's not counted above.)*
+## 4. What "AI" means here
+- **No trained forecasting or classification model is used.** Forecasts are Open-Meteo's real numerical weather prediction; the wildfire-risk score is a documented formula. Training a model without real labelled history would misrepresent its accuracy.
+- **Ask Gaia** is the one LLM feature. It must call this backend's own endpoints for every number. For ambiguous place names it lists the options rather than guessing, and it refuses near-spellings.
+- **The scenario simulator is not AI** — it applies cited coefficients to real current data and labels every output `measured`, `estimated` or `modeled`.
 
-## 4. What "AI" Actually Means Here
-This section exists because earlier drafts of this document overstated it — worth saying plainly:
+## 5. Architecture
+- **Backend:** one FastAPI app (`backend/main.py`) that also serves the static frontend. Each data source has its own module in `backend/services/`, with an in-memory TTL cache and an honestly labelled failure state.
+- **Disk caches** for data that never changes: 1991–2020 temperature baselines per location, and last-good snapshots of NOAA NCEI / USGS historical catalogues.
+- **Frontend:** vanilla JavaScript + CesiumJS (`js/`), one stylesheet (`css/style.css`).
+- **Persistence:** SQLite (`backend/reports.db`) for citizen reports.
+- **Tests:** `backend/tests/` (101 offline tests).
 
-- **No trained forecasting model (LSTM/ARIMA) is used.** `backend/services/forecast.py` wraps Open-Meteo's own real numerical-weather-prediction output. That's a deliberate choice: this backend has no historical per-region time-series store to train on, and fabricating a "trained model" on top of borrowed/synthetic data would violate the project's own honesty principle. If that store gets built later, a real regional model could *complement* this, not replace working real data with something weaker.
-- **No trained wildfire classifier (Random Forest/XGBoost) is used.** `backend/services/wildfire_risk.py` is a transparent, documented, weighted formula over real temperature/humidity/wind/NDVI. Training a real classifier requires labeled historical fire-outcome data this project doesn't have; a fabricated "trained model" would misrepresent both the training process and its accuracy.
-- **What genuinely is "AI":** "Ask Gaia," a tool-calling LLM assistant that is only allowed to answer factual questions by calling this backend's own real endpoints — it cannot guess a number. This is the one place an LLM is used in the live product, and it's grounded by design.
-- **The scenario simulator is not AI at all** — it's real data plus cited published coefficients, and it says so explicitly in its own confidence labels (`measured` / `estimated` / `modeled`).
+## 6. Data-honesty rules (as implemented)
+- Every figure carries its source and an as-of date; live, archive, forecast, estimate and formula values are badged differently.
+- Failures are shown as "unavailable" with a reason — never filled with a default value.
+- Temperature: the **current** reading is the live model value at the exact point; the **anomaly** is the last 7 days of ERA5 daily-mean temperature minus the 1991–2020 mean for the same calendar days, from the same dataset on both sides.
+- Hazards: "Active now" requires the source's own current status and end date, never just "happened recently"; earthquakes are never "active".
+- Casualties: ranges and every source's figure are shown; overlapping ranks are flagged; preliminary figures (events under a year old) are never promoted to a record.
+- Heatwaves are a separate category with explicit method labels (excess deaths vs modelled heat deaths), never mixed into the Deadliest ranking.
 
-## 5. System Architecture & Real-World Data Integration
-A single FastAPI backend (`backend/main.py`) serving both the API and the static frontend (no separate frontend server needed in the default run mode), backed by small per-feature service modules that each call a real external API with an in-process TTL cache and an honestly-labeled fallback. No background workers, no message queue, no persistent cache beyond SQLite for citizen reports — this is a synchronous, request-driven architecture appropriate for its current scale, not yet a production ingestion pipeline.
+## 7. Notable design decisions
+- **Temperature heatmap removed (Oct 2026).** A real anomaly map needs a dense grid, each cell with its own 30-year baseline — far beyond the free API tier. The 126-point version rendered as misleading discs, so the globe overlay was dropped; the Temperature toggle still drives the exact point anomaly and history.
+- **Costliest-disaster record deferred.** No open, authoritative global loss dataset exists.
+- **Droughts, famines and epidemics excluded** from Historical Extremes: their deaths cannot be cleanly attributed to the natural hazard.
+- **EM-DAT not used.** Its licence forbids redistributing its data online; it is referenced, not embedded.
+- **ReliefWeb not integrated yet.** Its API now requires a pre-approved app name; integration is planned once approval is obtained.
 
-### Data Layer Status
-See `PROJECT_STATUS.md` for the current, maintained version of this table — kept in one place to avoid the two documents drifting apart again.
-
-## 6. Development Roadmap
-- **Phase 1 – Visualization**: ✅ Done. 3D globe, 5-tab UI, Docker support.
-- **Phase 2 – Data Layers**: ✅ Done. Real wildfire, air-quality, climate, and vegetation integrations.
-- **Phase 3 – Simulation & Forecasting**: ✅ Done. Cited scenario engine, real Open-Meteo forecasts, rule-based wildfire risk, grounded Ask Gaia assistant.
-- **Phase 4 – Polish & Trust**: 🚧 In progress. Surfacing data-provenance badges in the UI (the backend already computes them), mobile/responsive layout, accessibility pass, automated tests.
-- **Phase 5 – Historical Timeline rebuild**: 📋 Planned, not started. Re-enable the disabled Temporal tab with a properly fixed imagery-layer state machine.
-
-## 7. Key Strengths
-- **Authoritative, real data**: NASA, NOAA, Open-Meteo, OpenAQ, MODIS — not placeholder feeds.
-- **Disciplined honesty**: every derived number is labeled with its actual confidence level and, where relevant, its citation — genuinely rare at this project's scale.
-- **Grounded AI, not a hallucination risk**: Ask Gaia can only report real numbers it actually looked up.
+## 8. Roadmap
+See [`PROJECT_PHASES.md`](PROJECT_PHASES.md).

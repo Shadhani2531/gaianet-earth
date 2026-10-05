@@ -1,0 +1,907 @@
+{
+  "_about": "Small verified baseline for Historical Extremes. ONLY what no live dataset provides: (a) standalone events outside NCEI's scope (floods, tropical cyclones, tornadoes) and WMO-adjudicated records, (b) 'overlay' entries that attach documented casualty RANGES and extra sources to an NCEI record (NCEI gives one figure). Every figure carries its own source. Reviewed by a human; never auto-edited. Re-verify entries whose verified_on is older than 12 months (tests warn).",
+  "schema_version": 1,
+  "entries": [
+    {
+      "id": "china-floods-1931",
+      "kind": "event",
+      "hazard": "flood",
+      "name": "1931 China floods (Yangtze–Huai)",
+      "date": {
+        "year": 1931,
+        "month": 7
+      },
+      "date_note": "July–November 1931, depending on river",
+      "location": {
+        "lat": 30.59,
+        "lon": 114.3,
+        "approximate": true,
+        "label": "Wuhan — centre of the affected Yangtze–Huai region (approximate)"
+      },
+      "deaths": {
+        "best": null,
+        "low": 422420,
+        "high": 4000000
+      },
+      "figures": [
+        {
+          "value": 422420,
+          "label": "Chinese historians led by Li Wenhai, from contemporary media reports (also cited as 422,499)",
+          "source": "Li Wenhai et al. (1994), as compiled by Wikipedia",
+          "url": "https://en.wikipedia.org/wiki/1931_China_floods"
+        },
+        {
+          "value_low": 3700000,
+          "value_high": 4000000,
+          "label": "Some Western estimates, including deaths from famine and disease in following years",
+          "source": "As compiled by Wikipedia",
+          "url": "https://en.wikipedia.org/wiki/1931_China_floods"
+        }
+      ],
+      "confidence": "low",
+      "notes": "No single authoritative estimate exists. The higher figures include indirect deaths (famine, disease) over the following years; WMO has not assessed flood mortality records.",
+      "verified_on": "2026-10-03"
+    },
+    {
+      "id": "yellow-river-1887",
+      "kind": "event",
+      "hazard": "flood",
+      "name": "1887 Yellow River flood",
+      "date": {
+        "year": 1887,
+        "month": 9
+      },
+      "date_note": "Dikes failed around 28 September 1887",
+      "location": {
+        "lat": 34.9,
+        "lon": 113.65,
+        "approximate": true,
+        "label": "Dike breach area in Henan (approximate)"
+      },
+      "deaths": {
+        "best": null,
+        "low": 900000,
+        "high": 2000000
+      },
+      "figures": [
+        {
+          "value": 900500,
+          "label": "Low estimate (Gunn 2007 quotes 900,500)",
+          "source": "Gunn (2007), as compiled by Wikipedia",
+          "url": "https://en.wikipedia.org/wiki/1887_Yellow_River_flood"
+        },
+        {
+          "value": 2000000,
+          "label": "Highest estimate",
+          "source": "As compiled by Wikipedia",
+          "url": "https://en.wikipedia.org/wiki/1887_Yellow_River_flood"
+        }
+      ],
+      "confidence": "low",
+      "notes": "No official certified death toll exists.",
+      "verified_on": "2026-10-03"
+    },
+    {
+      "id": "yangtze-flood-1935",
+      "kind": "event",
+      "hazard": "flood",
+      "name": "1935 Yangtze flood",
+      "date": {
+        "year": 1935,
+        "month": 7
+      },
+      "location": {
+        "lat": 30.4,
+        "lon": 112.2,
+        "approximate": true,
+        "label": "Middle Yangtze, Hubei — affected Hubei, Hunan, Jiangxi, Anhui, Jiangsu, Zhejiang (approximate)"
+      },
+      "deaths": {
+        "best": 145000,
+        "low": null,
+        "high": null
+      },
+      "figures": [
+        {
+          "value": 145000,
+          "label": "Death toll of about 145,000",
+          "source": "Sage Encyclopedia of Disaster Relief",
+          "url": "https://sk.sagepub.com/ency/edvol/disasterrelief/chpt/yangtze-river-flood-1935"
+        }
+      ],
+      "confidence": "low",
+      "notes": "Single widely cited estimate; no published range.",
+      "verified_on": "2026-10-03"
+    },
+    {
+      "id": "bhola-cyclone-1970",
+      "kind": "event",
+      "hazard": "tropical_cyclone",
+      "name": "1970 Bhola cyclone",
+      "date": {
+        "year": 1970,
+        "month": 11,
+        "day": 12
+      },
+      "location": {
+        "lat": 22.6,
+        "lon": 90.65,
+        "approximate": true,
+        "label": "Bhola, Bangladesh (then East Pakistan)"
+      },
+      "deaths": {
+        "best": 300000,
+        "low": 300000,
+        "high": 500000
+      },
+      "figures": [
+        {
+          "value": 300000,
+          "label": "WMO-adopted record: highest mortality associated with a tropical cyclone (since 1873)",
+          "source": "WMO Archive of Weather and Climate Extremes (2017)",
+          "url": "https://reliefweb.int/report/world/wmo-determines-highest-death-tolls-tropical-cyclones-tornadoes-lightning-and-hailstorms"
+        },
+        {
+          "value_low": 300000,
+          "value_high": 500000,
+          "label": "Low-end and high-end storm-related fatality estimates noted in the WMO assessment",
+          "source": "WMO assessment (Cerveny et al. 2017), as reported",
+          "url": "https://journals.ametsoc.org/view/journals/wcas/9/3/wcas-d-16-0120_1.xml"
+        }
+      ],
+      "confidence": "official_record",
+      "notes": "Record period begins 1873 (WMO).",
+      "verified_on": "2026-10-03"
+    },
+    {
+      "id": "saturia-tornado-1989",
+      "kind": "event",
+      "hazard": "tornado",
+      "name": "1989 Daulatpur–Saturia tornado",
+      "date": {
+        "year": 1989,
+        "month": 4,
+        "day": 26
+      },
+      "location": {
+        "lat": 23.93,
+        "lon": 90.03,
+        "approximate": true,
+        "label": "Manikganj district, Bangladesh"
+      },
+      "deaths": {
+        "best": 1300,
+        "low": null,
+        "high": null
+      },
+      "figures": [
+        {
+          "value": 1300,
+          "label": "WMO-adopted record: highest mortality associated with a tornado; 'most reliable estimate'",
+          "source": "WMO Archive of Weather and Climate Extremes (2017)",
+          "url": "https://www.preventionweb.net/news/wmo-determines-highest-death-tolls-tropical-cyclones-tornadoes-lightning-and-hailstorms"
+        }
+      ],
+      "confidence": "official_record",
+      "notes": "Estimate; no range published.",
+      "verified_on": "2026-10-03"
+    },
+    {
+      "id": "nargis-2008",
+      "kind": "event",
+      "hazard": "tropical_cyclone",
+      "name": "2008 Cyclone Nargis",
+      "date": {
+        "year": 2008,
+        "month": 5,
+        "day": 2
+      },
+      "location": {
+        "lat": 16.3,
+        "lon": 95.0,
+        "approximate": true,
+        "label": "Ayeyarwady Delta, Myanmar (approximate)"
+      },
+      "deaths": {
+        "best": null,
+        "low": 84537,
+        "high": 138373
+      },
+      "figures": [
+        {
+          "value": 84537,
+          "label": "Official death toll (as of 24 June 2008)",
+          "source": "Post-Nargis Joint Assessment (Government of Myanmar, ASEAN, UN)",
+          "url": "https://www.gfdrr.org/sites/default/files/GFDRR_Myanmar_Post-Nargis_Joint_Assessment_2008_EN.pdf"
+        },
+        {
+          "value": 138373,
+          "label": "Official dead (84,537) plus missing (53,836)",
+          "source": "Post-Nargis Joint Assessment",
+          "url": "https://www.gfdrr.org/sites/default/files/GFDRR_Myanmar_Post-Nargis_Joint_Assessment_2008_EN.pdf"
+        }
+      ],
+      "confidence": "medium",
+      "notes": "Higher unofficial estimates exist but are not used here.",
+      "verified_on": "2026-10-03"
+    },
+    {
+      "id": "bangladesh-cyclone-1991",
+      "kind": "event",
+      "hazard": "tropical_cyclone",
+      "name": "1991 Bangladesh cyclone",
+      "date": {
+        "year": 1991,
+        "month": 4,
+        "day": 29
+      },
+      "location": {
+        "lat": 22.0,
+        "lon": 91.85,
+        "approximate": true,
+        "label": "Landfall south of Chittagong, Bangladesh (approximate)"
+      },
+      "deaths": {
+        "best": 138866,
+        "low": 138866,
+        "high": 145000
+      },
+      "figures": [
+        {
+          "value": 138866,
+          "label": "Deaths reported by the Ministry of Relief and Rehabilitation (21 May 1991)",
+          "source": "UN DHA via ReliefWeb",
+          "url": "https://reliefweb.int/taxonomy/term/5843"
+        },
+        {
+          "value": 145000,
+          "label": "Some estimates place fatalities as high as 145,000",
+          "source": "EBSCO Research Starters",
+          "url": "https://www.ebsco.com/research-starters/history/bangladesh-cyclone-1991/"
+        }
+      ],
+      "confidence": "medium",
+      "notes": "Mostly storm-surge deaths.",
+      "verified_on": "2026-10-03"
+    },
+    {
+      "id": "lituya-bay-1958",
+      "kind": "record_only",
+      "hazard": "tsunami",
+      "name": "1958 Lituya Bay megatsunami",
+      "date": {
+        "year": 1958,
+        "month": 7,
+        "day": 9
+      },
+      "location": {
+        "lat": 58.65,
+        "lon": -137.53,
+        "approximate": false,
+        "label": "Gilbert Inlet, Lituya Bay, Alaska"
+      },
+      "metric": {
+        "runup_m": 524
+      },
+      "figures": [
+        {
+          "value": 524,
+          "unit": "m",
+          "label": "Run-up of 1,720 ft (524 m) on the spur opposite the Gilbert Inlet rockslide — highest tsunami run-up documented",
+          "source": "Miller (1960), USGS Professional Paper 354-C; Alaska Earthquake Center",
+          "url": "https://earthquake.alaska.edu/60-years-ago-1958-earthquake-and-lituya-bay-megatsunami"
+        }
+      ],
+      "confidence": "measured",
+      "notes": "A local landslide-generated tsunami: run-up height on a hillside, not open-ocean wave height.",
+      "verified_on": "2026-10-03"
+    },
+    {
+      "id": "tambora-1815",
+      "kind": "overlay",
+      "hazard": "volcano",
+      "match": {
+        "year": 1815,
+        "month": 4,
+        "radius_km": 150
+      },
+      "name": "1815 eruption of Mount Tambora",
+      "date": {
+        "year": 1815,
+        "month": 4,
+        "day": 10
+      },
+      "location": {
+        "lat": -8.25,
+        "lon": 118.0,
+        "approximate": false,
+        "label": "Mount Tambora, Sumbawa, Indonesia"
+      },
+      "deaths": {
+        "best": 71000,
+        "low": 71000,
+        "high": 92000
+      },
+      "figures": [
+        {
+          "value": 71000,
+          "label": "At least 71,000 died during or after the eruption on Sumbawa and Lombok (incl. famine and disease); ~11,000–12,000 direct deaths",
+          "source": "Oppenheimer (2003), Progress in Physical Geography 27(2)",
+          "url": "https://www.researchgate.net/publication/233720521_Climatic_environmental_and_human_consequences_of_the_largest_known_historic_eruption_Tambora_volcano_Indonesia_1815"
+        },
+        {
+          "value": 92000,
+          "label": "Older, often-cited total, now considered an overestimate",
+          "source": "As compiled by secondary sources",
+          "url": "https://www.pbs.org/wgbh/nova/volcanocity/dead-nf.html"
+        }
+      ],
+      "confidence": "medium",
+      "notes": "Totals include indirect deaths; direct deaths were roughly 11,000–12,000.",
+      "verified_on": "2026-10-03"
+    },
+    {
+      "id": "haiti-2010",
+      "kind": "overlay",
+      "hazard": "earthquake",
+      "match": {
+        "year": 2010,
+        "month": 1,
+        "day": 12,
+        "radius_km": 150
+      },
+      "name": "2010 Haiti earthquake",
+      "date": {
+        "year": 2010,
+        "month": 1,
+        "day": 12
+      },
+      "location": {
+        "lat": 18.46,
+        "lon": -72.53,
+        "approximate": false,
+        "label": "Léogâne, near Port-au-Prince, Haiti"
+      },
+      "deaths": {
+        "best": 136933,
+        "low": 46190,
+        "high": 316000
+      },
+      "figures": [
+        {
+          "value": 316000,
+          "label": "Government of Haiti (dead or missing; announced Jan 2011, method not explained)",
+          "source": "Government of Haiti, via USGS overview",
+          "url": "https://escweb.wr.usgs.gov/share/mooney/142.pdf"
+        },
+        {
+          "value_low": 122000,
+          "value_high": 167000,
+          "label": "Weighted analysis of published estimates (median ~136,933)",
+          "source": "Daniell et al. (2013), NHESS Discussions",
+          "url": "https://nhess.copernicus.org/preprints/1/1913/2013/nhessd-1-1913-2013.pdf"
+        },
+        {
+          "value": 158000,
+          "label": "Household survey estimate",
+          "source": "Kolbe et al. (2010), Medicine, Conflict and Survival, via CJR",
+          "url": "https://www.cjr.org/behind_the_news/one_year_later_haitian_earthqu.php"
+        },
+        {
+          "value_low": 46190,
+          "value_high": 84961,
+          "label": "Report commissioned by USAID",
+          "source": "via Columbia Journalism Review",
+          "url": "https://www.cjr.org/behind_the_news/one_year_later_haitian_earthqu.php"
+        }
+      ],
+      "confidence": "disputed",
+      "notes": "One of the most disputed modern death tolls; estimates differ by more than 6x. Ranked by the peer-reviewed weighted median (Daniell et al. 2013); the government figure of 316,000 is shown as the upper bound.",
+      "verified_on": "2026-10-03"
+    },
+    {
+      "id": "tangshan-1976",
+      "kind": "overlay",
+      "hazard": "earthquake",
+      "match": {
+        "year": 1976,
+        "month": 7,
+        "day": 27,
+        "radius_km": 150
+      },
+      "name": "1976 Tangshan earthquake",
+      "date": {
+        "year": 1976,
+        "month": 7,
+        "day": 27
+      },
+      "location": {
+        "lat": 39.63,
+        "lon": 118.18,
+        "approximate": false,
+        "label": "Tangshan, Hebei, China"
+      },
+      "deaths": {
+        "best": 242419,
+        "low": 240000,
+        "high": 655237
+      },
+      "figures": [
+        {
+          "value": 242419,
+          "label": "Official figure (range 240,000–255,000 in the same analysis)",
+          "source": "Daniell et al. (2013), NHESS Discussions",
+          "url": "https://nhess.copernicus.org/preprints/1/1913/2013/nhessd-1-1913-2013.pdf"
+        },
+        {
+          "value": 655237,
+          "label": "Initial government reports",
+          "source": "Daniell et al. (2013), NHESS Discussions",
+          "url": "https://nhess.copernicus.org/preprints/1/1913/2013/nhessd-1-1913-2013.pdf"
+        }
+      ],
+      "confidence": "medium",
+      "notes": "Official totals are also cited as 242,769.",
+      "verified_on": "2026-10-03"
+    },
+    {
+      "id": "shaanxi-1556",
+      "kind": "overlay",
+      "hazard": "earthquake",
+      "match": {
+        "year": 1556,
+        "month": 1,
+        "radius_km": 250
+      },
+      "name": "1556 Shaanxi earthquake",
+      "date": {
+        "year": 1556,
+        "month": 1,
+        "day": 23
+      },
+      "location": {
+        "lat": 34.5,
+        "lon": 109.7,
+        "approximate": true,
+        "label": "Hua County, Shaanxi, China (approximate)"
+      },
+      "deaths": {
+        "best": null,
+        "low": 100000,
+        "high": 830000
+      },
+      "figures": [
+        {
+          "value": 830000,
+          "label": "Traditional total from historical records — includes deaths from famine and people who migrated away",
+          "source": "Historical Chinese records, as compiled by Wikipedia",
+          "url": "https://en.wikipedia.org/wiki/Lists_of_earthquakes"
+        },
+        {
+          "value": 100000,
+          "label": "Direct deaths thought to be just over 100,000",
+          "source": "As compiled by Wikipedia",
+          "url": "https://en.wikipedia.org/wiki/Lists_of_earthquakes"
+        }
+      ],
+      "confidence": "low",
+      "notes": "Pre-instrumental; the famous ~830,000 figure is not a direct-death count.",
+      "verified_on": "2026-10-03"
+    },
+    {
+      "id": "backerganj-cyclone-1876",
+      "kind": "event",
+      "hazard": "tropical_cyclone",
+      "name": "1876 Great Backerganj cyclone",
+      "date": {
+        "year": 1876,
+        "month": 10,
+        "day": 31
+      },
+      "location": {
+        "lat": 22.6,
+        "lon": 90.7,
+        "approximate": true,
+        "label": "Meghna estuary, Barisal, Bangladesh (approximate)"
+      },
+      "deaths": {
+        "best": 200000,
+        "low": null,
+        "high": null
+      },
+      "figures": [
+        {
+          "value": 200000,
+          "label": "Approximately 200,000 deaths; about half from disease and starvation after the flooding",
+          "source": "Encyclopaedia Britannica",
+          "url": "https://www.britannica.com/event/Bengal-cyclone-of-1876"
+        }
+      ],
+      "confidence": "low",
+      "notes": "Includes indirect deaths from disease and starvation. (WMO's adjudicated cyclone record is the 1970 Bhola cyclone.)",
+      "verified_on": "2026-10-03"
+    },
+    {
+      "id": "swatow-typhoon-1922",
+      "kind": "event",
+      "hazard": "tropical_cyclone",
+      "name": "1922 Swatow (Shantou) typhoon",
+      "date": {
+        "year": 1922,
+        "month": 8,
+        "day": 2
+      },
+      "location": {
+        "lat": 23.35,
+        "lon": 116.68,
+        "approximate": true,
+        "label": "Shantou, Guangdong, China"
+      },
+      "deaths": {
+        "best": null,
+        "low": 50000,
+        "high": 100000
+      },
+      "figures": [
+        {
+          "value_low": 50000,
+          "value_high": 100000,
+          "label": "Fatalities 50,000–100,000+; total above 60,000 per NOAA's global listing",
+          "source": "As compiled by Wikipedia (citing NOAA)",
+          "url": "https://en.wikipedia.org/wiki/1922_Shantou_typhoon"
+        }
+      ],
+      "confidence": "low",
+      "notes": "Death toll uncertain; may have exceeded 100,000.",
+      "verified_on": "2026-10-03"
+    },
+    {
+      "id": "yangtze-flood-1954",
+      "kind": "event",
+      "hazard": "flood",
+      "name": "1954 Yangtze floods",
+      "date": {
+        "year": 1954,
+        "month": 6
+      },
+      "location": {
+        "lat": 30.5,
+        "lon": 114.3,
+        "approximate": true,
+        "label": "Middle and lower Yangtze (approximate)"
+      },
+      "deaths": {
+        "best": 33000,
+        "low": null,
+        "high": null
+      },
+      "figures": [
+        {
+          "value": 33000,
+          "label": "Estimated death toll of about 33,000",
+          "source": "As compiled by Wikipedia (list of deadliest floods)",
+          "url": "https://en.wikipedia.org/wiki/List_of_deadliest_floods"
+        }
+      ],
+      "confidence": "low",
+      "notes": "Single widely cited estimate.",
+      "verified_on": "2026-10-03"
+    },
+    {
+      "id": "hurricane-mitch-1998",
+      "kind": "event",
+      "hazard": "tropical_cyclone",
+      "name": "1998 Hurricane Mitch",
+      "date": {
+        "year": 1998,
+        "month": 10,
+        "day": 29
+      },
+      "location": {
+        "lat": 15.2,
+        "lon": -86.6,
+        "approximate": true,
+        "label": "Honduras and Nicaragua (approximate)"
+      },
+      "deaths": {
+        "best": 11000,
+        "low": 9086,
+        "high": 18000
+      },
+      "figures": [
+        {
+          "value": 9086,
+          "label": "Estimated death toll in NHC's preliminary report",
+          "source": "NOAA National Hurricane Center, Preliminary Report: Hurricane Mitch",
+          "url": "https://www.nhc.noaa.gov/data/tcr/AL131998_Mitch.pdf"
+        },
+        {
+          "value": 11000,
+          "label": "Killed more than 11,000 people (mostly Honduras and Nicaragua)",
+          "source": "Encyclopaedia Britannica",
+          "url": "https://www.britannica.com/event/Hurricane-Mitch"
+        },
+        {
+          "value": 18000,
+          "label": "Some estimates as high as 18,000",
+          "source": "History.com",
+          "url": "https://www.history.com/articles/hurricane-mitch"
+        }
+      ],
+      "confidence": "medium",
+      "notes": "Deaths mainly from rain-induced flooding and mudslides; thousands more were missing.",
+      "verified_on": "2026-10-03"
+    },
+    {
+      "id": "vargas-1999",
+      "kind": "event",
+      "hazard": "landslide",
+      "name": "1999 Vargas debris flows",
+      "date": {
+        "year": 1999,
+        "month": 12,
+        "day": 15
+      },
+      "location": {
+        "lat": 10.605,
+        "lon": -66.85,
+        "approximate": false,
+        "label": "Vargas (now La Guaira) State, Venezuela"
+      },
+      "deaths": {
+        "best": 30000,
+        "low": 5000,
+        "high": 50000
+      },
+      "figures": [
+        {
+          "value": 30000,
+          "label": "Figure generally cited (USAID 2000); only about 1,000 bodies were recovered",
+          "source": "USGS Open-File Report 01-0144",
+          "url": "https://pubs.usgs.gov/of/2001/ofr-01-0144/"
+        },
+        {
+          "value_low": 5000,
+          "value_high": 50000,
+          "label": "Range of early estimates",
+          "source": "USGS Open-File Report 01-0144",
+          "url": "https://pubs.usgs.gov/of/2001/ofr-01-0144/"
+        }
+      ],
+      "confidence": "low",
+      "notes": "Flash floods and debris flows; no recent census, so the true toll will never be known.",
+      "verified_on": "2026-10-03"
+    },
+    {
+      "id": "europe-heat-2003",
+      "kind": "heatwave",
+      "hazard": "heatwave",
+      "name": "2003 European heatwave summer",
+      "date": {
+        "year": 2003,
+        "month": 8
+      },
+      "date_note": "Summer 2003; deadliest in early–mid August",
+      "location": {
+        "lat": 46.5,
+        "lon": 4.0,
+        "approximate": true,
+        "label": "Western and southern Europe — worst hit France and Italy (approximate)"
+      },
+      "deaths": {
+        "best": 70000,
+        "low": 70000,
+        "high": null,
+        "qualifier": "more_than"
+      },
+      "metric_type": "excess_deaths",
+      "figures": [
+        {
+          "value": 70000,
+          "label": "More than 70,000 additional deaths in Europe during summer 2003 (excess mortality, 16 countries)",
+          "source": "Robine et al. (2008), Comptes Rendus Biologies 331:171–178",
+          "url": "https://doi.org/10.1016/j.crvi.2007.12.001"
+        }
+      ],
+      "confidence": "medium",
+      "notes": "No confidence interval published; 'more than 70,000' is the study's own wording.",
+      "verified_on": "2026-10-03"
+    },
+    {
+      "id": "russia-heat-2010",
+      "kind": "heatwave",
+      "hazard": "heatwave",
+      "name": "2010 Russian heatwave",
+      "date": {
+        "year": 2010,
+        "month": 7
+      },
+      "date_note": "July–August 2010",
+      "location": {
+        "lat": 55.75,
+        "lon": 37.6,
+        "approximate": true,
+        "label": "European Russia — Moscow region worst hit (approximate)"
+      },
+      "deaths": {
+        "best": 55000,
+        "low": 54000,
+        "high": 56000
+      },
+      "metric_type": "excess_deaths",
+      "figures": [
+        {
+          "value": 54000,
+          "label": "Cumulative excess deaths in European Russia, July–August 2010 vs the same period of 2009",
+          "source": "Revich (2011), as summarised in Revich & Shaposhnikov, Atmosphere 12:1331 (2021)",
+          "url": "https://doi.org/10.3390/atmos12101331"
+        },
+        {
+          "value": 55000,
+          "label": "Death-toll estimate for European Russia; Moscow alone ~10,860 excess deaths",
+          "source": "Shaposhnikov et al. (2014), Epidemiology 25(3)",
+          "url": "https://europepmc.org/api/getPdf?pmcid=PMC3984022"
+        },
+        {
+          "value": 56000,
+          "label": "Deaths from the combined effects of heat and wildfire smoke",
+          "source": "Munich Re, as compiled by Wikipedia",
+          "url": "https://en.wikipedia.org/wiki/2010_Russian_wildfires"
+        }
+      ],
+      "confidence": "medium",
+      "notes": "Heat and wildfire smoke acted together; their effects on mortality are hard to separate.",
+      "verified_on": "2026-10-03"
+    },
+    {
+      "id": "europe-heat-2022",
+      "kind": "heatwave",
+      "hazard": "heatwave",
+      "name": "2022 European summer heat",
+      "date": {
+        "year": 2022,
+        "month": 7
+      },
+      "date_note": "30 May – 4 September 2022",
+      "location": {
+        "lat": 42.0,
+        "lon": 8.0,
+        "approximate": true,
+        "label": "Europe — highest burdens in Italy, Spain and Germany (approximate)"
+      },
+      "deaths": {
+        "best": 61672,
+        "low": 37643,
+        "high": 86807
+      },
+      "metric_type": "heat_attributable",
+      "figures": [
+        {
+          "value": 61672,
+          "value_low": 37643,
+          "value_high": 86807,
+          "label": "Heat-related deaths, 35 countries (95% CI 37,643–86,807)",
+          "source": "Ballester et al. (2023), Nature Medicine 29:1857–1866",
+          "url": "https://doi.org/10.1038/s41591-023-02419-z"
+        },
+        {
+          "value": 67873,
+          "label": "Re-estimate with a different set of 654 regions in 32 countries, June–September",
+          "source": "Janoš et al. (2025), Nature Medicine, via ISGlobal",
+          "url": "https://www.isglobal.org/en/-/62.700-muertes-asociadas-con-el-calor-del-verano-de-2024"
+        }
+      ],
+      "confidence": "medium",
+      "notes": "Covers the whole summer, which included several heatwaves.",
+      "verified_on": "2026-10-03"
+    },
+    {
+      "id": "europe-heat-2023",
+      "kind": "heatwave",
+      "hazard": "heatwave",
+      "name": "2023 European heat",
+      "date": {
+        "year": 2023,
+        "month": 7
+      },
+      "date_note": "Whole year 2023 (47,312 of these deaths fell between 29 May and 1 October)",
+      "location": {
+        "lat": 42.0,
+        "lon": 12.0,
+        "approximate": true,
+        "label": "Europe — highest burden in Italy (approximate)"
+      },
+      "deaths": {
+        "best": 47690,
+        "low": 28853,
+        "high": 66525
+      },
+      "metric_type": "heat_attributable",
+      "figures": [
+        {
+          "value": 47690,
+          "value_low": 28853,
+          "value_high": 66525,
+          "label": "Heat-related deaths in 35 countries during 2023 (95% CI 28,853–66,525)",
+          "source": "Gallo et al. (2024), Nature Medicine 30:3101–3105",
+          "url": "https://www.nature.com/articles/s41591-024-03186-1"
+        },
+        {
+          "value": 50798,
+          "label": "Re-estimate for summer 2023 with a different set of regions",
+          "source": "Janoš et al. (2025), Nature Medicine, via ISGlobal",
+          "url": "https://www.isglobal.org/en/-/62.700-muertes-asociadas-con-el-calor-del-verano-de-2024"
+        }
+      ],
+      "confidence": "medium",
+      "notes": "The authors caution these figures may underestimate the true burden.",
+      "verified_on": "2026-10-03"
+    },
+    {
+      "id": "europe-heat-2024",
+      "kind": "heatwave",
+      "hazard": "heatwave",
+      "name": "2024 European summer heat",
+      "date": {
+        "year": 2024,
+        "month": 7
+      },
+      "date_note": "1 June – 30 September 2024",
+      "location": {
+        "lat": 42.0,
+        "lon": 21.0,
+        "approximate": true,
+        "label": "Europe — highest rates in Greece, Bulgaria and Serbia (approximate)"
+      },
+      "deaths": {
+        "best": 62775,
+        "low": null,
+        "high": null
+      },
+      "metric_type": "heat_attributable",
+      "figures": [
+        {
+          "value": 62775,
+          "label": "Heat-related deaths in 654 regions of 32 countries, 1 June – 30 September 2024",
+          "source": "Janoš et al. (2025), Nature Medicine 31:4065–4074, via ISGlobal",
+          "url": "https://www.isglobal.org/en/-/62.700-muertes-asociadas-con-el-calor-del-verano-de-2024"
+        }
+      ],
+      "confidence": "medium",
+      "notes": "Confidence interval not reported in the sources reviewed here.",
+      "verified_on": "2026-10-03"
+    }
+  ],
+  "records": [
+    {
+      "category": "deadliest_tropical_cyclone",
+      "baseline_id": "bhola-cyclone-1970",
+      "metric_label": "Deaths (since 1873)",
+      "authority": "WMO"
+    },
+    {
+      "category": "deadliest_tornado",
+      "baseline_id": "saturia-tornado-1989",
+      "metric_label": "Deaths",
+      "authority": "WMO"
+    },
+    {
+      "category": "deadliest_flood",
+      "baseline_id": "china-floods-1931",
+      "metric_label": "Deaths",
+      "authority": "No adjudicating body — contested"
+    },
+    {
+      "category": "highest_tsunami_runup",
+      "baseline_id": "lituya-bay-1958",
+      "metric_label": "Run-up height",
+      "authority": "USGS (Miller 1960)"
+    },
+    {
+      "category": "deadliest_heatwave",
+      "baseline_id": "europe-heat-2003",
+      "metric_label": "Estimated excess deaths",
+      "authority": "Peer-reviewed estimate (Robine et al. 2008)"
+    }
+  ]
+}

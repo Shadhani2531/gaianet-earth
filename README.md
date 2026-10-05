@@ -1,26 +1,50 @@
-# GaiaNet Earth (v2.1.0)
+# GaiaNet Earth (v2.2.0)
 
-**GaiaNet Earth** is a 3D environmental-intelligence dashboard: a CesiumJS globe overlaying real, live data (wildfires, air quality, vegetation, climate) plus a transparent "what-if" scenario tool and a grounded AI assistant. It's a portfolio/demo project, not a production monitoring platform — see `PROJECT_STATUS.md` for an honest list of what's real, what's a labeled estimate, and what's not built yet.
+**GaiaNet Earth** is a 3D environmental-intelligence dashboard: a CesiumJS globe that brings together real, live Earth data — current conditions, air quality, vegetation, wildfires, natural hazards and historical disasters — with a cited "what-if" scenario tool and a grounded AI assistant.
 
-## What's actually real here
-Every number this app shows carries a `data_source`/`confidence` label in the API response (see `PROJECT_STATUS.md`'s data table). The short version:
-- **Real, live:** NASA FIRMS wildfires, NASA GIBS satellite imagery, NASA MODIS NDVI (via ORNL DAAC), Open-Meteo climate/weather/rainfall/forecasts, OpenAQ v3 air-quality stations, NOAA global CO₂
-- **Derived from real data (not fabricated, not "AI"):** the composite Sustainability Health Index, the wildfire-risk score (a documented rule-based formula), and the "what-if" scenario engine (cited real climate-science coefficients — see `backend/services/scenario_engine.py`)
-- **Not built yet:** any trained ML/forecasting model. `forecast.py` wraps Open-Meteo's own forecast (real NWP output); `wildfire_risk.py` is a transparent formula, not a Random Forest/XGBoost classifier — both explain why in their own docstrings
+It is an academic/portfolio project, not an official monitoring or warning system. Its defining rule: **never present a fabricated number as if it were measured, and always say where a number comes from and how certain it is.** See [`PROJECT_STATUS.md`](PROJECT_STATUS.md) for exactly what is live, derived or estimated.
 
-## Features
-- Real-time NASA FIRMS wildfires + GIBS satellite imagery on a 3D Cesium globe
-- Click anywhere to pull real climate/AQI/NDVI/forecast data for that point
-- A cited "what-if" scenario simulator (deforestation / emissions impact)
-- "Ask Gaia" — an LLM assistant that only answers using this backend's own real endpoints, never a guessed number
-- Citizen incident reporting, cross-checked against real satellite wildfire detections
-- A one-click Impact Report (printable/PDF)
-- A companion Chrome extension for background AQI/wildfire alerts (local-dev only currently — see `EXTENSION_INTEGRATION.md`)
+## The eight tabs
 
-## Quick Start
-1. Ensure Python is installed.
-2. Copy `backend/.env.example` to `backend/.env` and fill in at least `WAQI_TOKEN` and `OPENAQ_API_KEY` (both have free tiers — see the comments in `.env.example` for what breaks without each one).
-3. Double-click **`start_project.bat`** in the root folder (Windows) or follow `RUN_INSTRUCTIONS.md` for manual/other-OS steps.
-4. The dashboard opens at `http://localhost:8000`.
+| Tab | What it does |
+|---|---|
+| 🌍 **Immersive Earth** | 3D globe with live NASA satellite imagery |
+| 🛰️ **Climate Insight** | Click or search any place: live temperature (+ anomaly vs 1991–2020), air quality, CO₂, rainfall, rain probability, vegetation (NDVI), history charts |
+| 🕐 **Historical Timeline** | NASA satellite snapshots from 2000 to today, with side-by-side compare |
+| 🧠 **Forecast Lab** | 7-day weather and 5-day air-quality forecasts (with dates), wildfire-risk score, what-if simulator |
+| 📢 **Community Reports** | Citizen incident reports, cross-checked against NASA FIRMS fire detections |
+| 🌐 **Global Health Index** | Country-level composite Sustainability Health Index |
+| ⚠️ **Disasters & Hazards** | **Active now** and **Previous** events (GDACS + USGS), plus **Historical Extremes**: deadliest disasters, heatwaves and record holders with sourced casualty ranges |
+| 💬 **Ask Gaia** | LLM assistant that answers only from this backend's own real data |
 
-For the full, current feature-by-feature status (what's live vs. estimated vs. not-yet-built), see **[PROJECT_STATUS.md](PROJECT_STATUS.md)**. For run details see **[RUN_INSTRUCTIONS.md](RUN_INSTRUCTIONS.md)**.
+## Where the data comes from
+
+- **Live:** Open-Meteo (current conditions, forecasts, ERA5 archive), WAQI / OpenAQ / CAMS (air quality), NOAA GML (CO₂), NASA FIRMS (fires), NASA GIBS (imagery), NASA MODIS via ORNL DAAC (NDVI), GDACS and USGS (current hazards), NOAA NCEI (historical earthquakes, tsunamis, eruptions)
+- **Verified baseline:** a small, sourced file of historical events no live API covers (major floods and cyclones, WMO-adjudicated records, peer-reviewed heatwave mortality) — `backend/data/historical_baseline.json`
+- **Derived, with disclosed methods:** temperature anomaly, Sustainability Health Index, wildfire-risk score, what-if projections
+- **No trained ML model** is used in any live feature — see [`PROJECT_OVERVIEW.md`](PROJECT_OVERVIEW.md) §4 for why
+
+## Quick start (Windows)
+
+1. Install Python 3.11+.
+2. Copy `backend/.env.example` to `backend/.env` and add your keys (all have free tiers — see [`RUN_INSTRUCTIONS.md`](RUN_INSTRUCTIONS.md)).
+3. Double-click **`start_project.bat`**.
+4. The dashboard opens at **http://localhost:8000** (API docs at `/docs`).
+
+## Tests
+
+```
+cd backend
+python -m unittest tests.test_temperature_anomaly tests.test_historical tests.test_disasters_rasuwa
+```
+101 tests, no network needed. They include a regression suite built from the real 26 Aug 2026 Rasuwa / Bhote Koshi (Nepal) disaster data.
+
+## Documentation
+
+- [`RUN_INSTRUCTIONS.md`](RUN_INSTRUCTIONS.md) — setup, keys, troubleshooting, API limits
+- [`PROJECT_OVERVIEW.md`](PROJECT_OVERVIEW.md) — purpose, architecture, design decisions
+- [`PROJECT_STATUS.md`](PROJECT_STATUS.md) — every data layer: source, status, caveats
+- [`PROJECT_PHASES.md`](PROJECT_PHASES.md) — feature checklist and roadmap
+- [`EXTENSION_INTEGRATION.md`](EXTENSION_INTEGRATION.md) — companion Chrome extension
+
+> Disaster information is shown for awareness only. It is **not an official warning system** — always follow national authorities.

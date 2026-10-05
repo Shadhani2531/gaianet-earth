@@ -1,56 +1,72 @@
-# GaiaNet Earth (v2.1.0) — Project Status
+# GaiaNet Earth (v2.2.0) — Project Status
 
-This document is meant to be read alongside the actual code, not instead of it — it's an honest status snapshot, updated to match what's currently in `main` rather than what was originally planned.
-
----
-
-## Current Tab Structure (7 tabs, live in `index.html`)
-
-1. **🌍 Earth** — Immersive CesiumJS globe with live NASA GIBS satellite imagery and auto-rotate.
-2. **📍 Insight** — Click anywhere on the globe (or search a place) for real climate/AQI/CO₂/NDVI analytics at that point.
-3. **🕐 Historical Timeline** — Scrub or play through 2000–present via flat NASA GIBS Snapshot API images (`js/snapshot-viewer.js`), with a split-compare mode and four curated preset locations (Amazon, Aral Sea, Dubai, Greenland). See below for why this isn't Cesium imagery layers anymore.
-4. **🧠 Prediction / Forecast Lab** — Real multi-day weather + AQI forecasts, the rule-based wildfire-risk score, and the "what-if" scenario simulator.
-5. **📢 Reports** — Citizen incident reporting (select a location on the globe, then "Submit a Report" in the sidebar — no right-click gesture), cross-checked against real NASA FIRMS wildfire detections.
-6. **🌐 Global Health Index** — Country-level composite Sustainability Health Index built from real OpenAQ + Open-Meteo + MODIS data at each country's capital.
-7. **💬 Ask Gaia** — Grounded LLM chat assistant, in its own tab/right-panel like every other tab above. Used to be a floating button + small chat bubble parked outside the tab system entirely; moved in so it's reachable the same way as everything else instead of a separate corner widget.
-
-### About the Historical Timeline / "4D Temporal Engine" tab
-This used to drive live Cesium WMTS imagery layers (NASA GIBS tiles) directly on the 3D globe, swapping a new layer in on every date change. That caused visible glitching — tiles popping in and out, rendering instability — because every tab shares the *same* Cesium scene, so churning imagery layers on it destabilized rendering globally, not just on this tab. It's been rebuilt from scratch: `js/snapshot-viewer.js` now renders flat images from NASA's Worldview Snapshot API (`wvs.earthdata.nasa.gov/api/v1/snapshot`) in its own panel, and never touches the globe's imagery layers at all. The old approach (`toggleSatelliteView`, `updateTime`, `refreshImageryLayers`, `refreshNdviImagery`, `refreshSatelliteImagery`, `toggleSplitScreen`) has been removed from `js/globe.js` entirely rather than left as dead weight. Trade-off: this is a raw satellite snapshot per date, not a cloud-free composite the way Google's Timelapse tool is — some dates may show cloud cover, and the UI says so.
+An honest snapshot of the current code (October 2026). If this file and the code disagree, the code is right — fix this file.
 
 ---
 
-## Data Layer Status — what's actually live vs. estimated vs. not real-time
+## Tabs (8, all live)
 
-| Data Layer | Type | Source | Update Freq | Status |
-| :--- | :--- | :--- | :--- | :--- |
-| **Wildfires** | Real-time | NASA FIRMS (MODIS 24h) | ~10 min cache | ✅ Live |
-| **Satellite Imagery** | Real-time | NASA GIBS | Live tiles | ✅ Live |
-| **Air Quality (point)** | Real-time, honest fallback | WAQI/AQICN | Live | ✅ Live when `WAQI_TOKEN` is set; falls back to a **labeled** estimate otherwise, never silently fabricated |
-| **Air Quality (stations, global)** | Real-time, 1–6h cache | OpenAQ v3 | Live | ✅ Live, requires `OPENAQ_API_KEY` (free) |
-| **CO₂ (global)** | Real, monthly | NOAA GML | Daily cache of a monthly figure | ✅ Live |
-| **Vegetation / NDVI (point)** | Real, with honest fallback | NASA MODIS (MOD13Q1 via ORNL DAAC) | 16-day composite | ✅ Live where MODIS has coverage; a clearly labeled biome/season **estimate** elsewhere (ocean, persistent cloud, pre-2000 dates) |
-| **Climate history & current conditions** | Real | Open-Meteo | Hourly cache | ✅ Live |
-| **7-day weather forecast** | Real NWP forecast | Open-Meteo forecast model | Live | ✅ Live — this is Open-Meteo's own real weather-model output, **not** a custom-trained LSTM/ARIMA. See `backend/services/forecast.py`'s docstring for why that's a deliberate choice, not a shortcut. |
-| **5-day AQI forecast** | Real, model-derived | Open-Meteo air-quality model | Live | ✅ Live, same caveat as above |
-| **Wildfire Risk Score** | Derived (transparent formula) | Real temp/humidity/wind (Open-Meteo) + real/estimated NDVI | Live | ✅ A documented rule-based fire-danger index — **not** a trained Random Forest/XGBoost model. See `backend/services/wildfire_risk.py`'s docstring for the honest reason why. |
-| **"What-If" Scenario Simulator** | Derived, cited | Real current data + published climate-science coefficients (PLOS ONE 2019, PNAS 2023, WRI 2021, EPA AQI breakpoints) | On demand | ✅ Every projected number carries a `measured`/`estimated`/`modeled` confidence tag and a citation — see `backend/services/scenario_engine.py` |
-| **Composite SHI (point & global)** | Derived from real inputs | Real AQI (+ real climate/NDVI at country level) | Live / 6h cache | ✅ A disclosed formula, not a black-box score |
-| **Atmospheric Sync (rain/snow visuals)** | Real *if configured*, else a labeled deterministic mock | OpenWeatherMap | Live | ⚠️ Without `OPENWEATHERMAP_API_KEY`, this silently runs on a deterministic (not random, but not real) placeholder — the API response does say `"status": "mock"`, but the UI doesn't yet surface that visually. Set the key for real weather-driven visuals. |
-| **Ask Gaia (chat assistant)** | Grounded LLM | An OpenAI-compatible LLM + this backend's own real endpoints | Live | ✅ Requires `GAIA_LLM_API_KEY`; the assistant is instructed to call a real tool for every number rather than guess |
-| **Ground Truth / Citizen Reports** | Real user input | SQLite, cross-checked against real NASA FIRMS for fire-type reports | Live | ✅ Live |
-
-There is no trained machine-learning model wired into any live endpoint in this project today. An earlier ML prototype (`backend/ml/`, trained on synthetic data) was removed rather than kept as unused dead weight — see the git history if you need to reference it. If real historical outcome data (e.g., confirmed fire events) becomes available later, `wildfire_risk.py`'s docstring already lays out how a genuine trained classifier could replace the current formula.
+1. **🌍 Immersive Earth** — CesiumJS globe, live NASA GIBS imagery.
+2. **🛰️ Climate Insight** — point analytics for any clicked or searched place; layer toggles gate the related cards and charts.
+3. **🕐 Historical Timeline** — NASA Worldview Snapshot images (2000–present) in their own panel, with split compare. Rendered off-globe on purpose: swapping live imagery layers destabilised the shared Cesium scene.
+4. **🧠 Forecast Lab** — 7-day weather (dated), 5-day AQI (dated), wildfire-risk score, what-if simulator.
+5. **📢 Community Reports** — citizen reports in SQLite, fire reports cross-checked against NASA FIRMS.
+6. **🌐 Global Health Index** — country-level composite SHI (~90 countries).
+7. **⚠️ Disasters & Hazards** — Active now · Previous (7 days / 30 days / custom) · Historical Extremes (Deadliest · Heatwaves · Record holders).
+8. **💬 Ask Gaia** — grounded LLM assistant.
 
 ---
 
-## Known Gaps (honest list)
+## Data layers
 
-- No authentication, no automated test suite, no CI pipeline.
-- In-process caching only (Python dicts with TTLs) — cache resets on every restart, not shared across multiple backend instances.
-- `country_coords.py` covers roughly 90 countries; `/shi-global` only scores countries with a capital in that table.
-- The frontend has a floor-level responsive/mobile layout (one `@media (max-width: 768px)` breakpoint covering the tab dock, side panels, insight card, and timeline strip via a "bottom sheet + bottom nav" pattern — see the comment above it in `css/style.css`) rather than a full dedicated mobile redesign. This previously only covered the old floating Ask Gaia widget; now that Gaia is a regular tab/right-panel, it's covered by the same general panel rules as everything else, with no separate override needed.
-- Accessibility (keyboard navigation, ARIA labeling) has not had a dedicated pass yet.
+| Layer | Source | Type | Notes |
+| :--- | :--- | :--- | :--- |
+| **Current temperature** | Open-Meteo current conditions | Live (model, ~15 min) | Exact point; shows "feels like" and local as-of time |
+| **Temperature anomaly** | Open-Meteo ERA5 archive | Derived | Last 7 days of daily-mean temperature minus the 1991–2020 mean for the same calendar days. Baselines cached per location on disk |
+| **Temperature History** | Open-Meteo ERA5 archive | Archive | 7-day mean around today's date in fixed reference years |
+| **Monthly chart** | Open-Meteo ERA5 archive | Archive | Monthly mean temperature and rainfall totals |
+| **Rainfall card** | Open-Meteo ERA5 archive | Archive | Month-to-date total, with "to <date>" |
+| **Rain probability** | Open-Meteo forecast | Forecast (NWP) | Next 24 h hourly + 7-day daily maximum; nulls stay blank |
+| **Air quality** | WAQI → OpenAQ v3 → Copernicus CAMS | Live, then model | WAQI station ≤50 km and <24 h; else OpenAQ ≤25 km; else CAMS model (badged EST). The source is always named |
+| **CO₂** | NOAA GML | Live (monthly) | Global monthly mean |
+| **NDVI** | NASA MODIS MOD13Q1 (ORNL DAAC) | Live (16-day) | Latest available composite |
+| **Wildfires** | NASA FIRMS | Live | |
+| **Satellite imagery** | NASA GIBS | Live tiles | |
+| **Weather / AQI forecasts** | Open-Meteo | Forecast (NWP) | Not a custom-trained model |
+| **Wildfire-risk score** | Derived formula | Derived | Uses the same current reading as the Insight card + NDVI |
+| **Health Index (SHI)** | Derived formula | Derived | Shows "--" when no real AQI exists; the AQI source is named |
+| **What-if simulator** | Real data + cited coefficients | Modelled | Every output labelled measured / estimated / modeled |
+| **Place search** | Cesium Ion → Nominatim; Open-Meteo GeoNames for suggestions | Live | Enter resolves exactly what was typed; same-name places are listed, never auto-picked |
+| **Active / previous hazards** | GDACS + USGS | Live | "Active" only if GDACS marks the event current and its episode end date is recent; USGS events (instantaneous) are never active. Cross-source duplicates linked, impacts never summed |
+| **Historical Deadliest / Records** | NOAA NCEI (earthquakes, tsunamis, eruptions) + USGS + verified baseline | Live + curated | Last-good snapshot cached; ranges and every source's figure shown; overlaps flagged (≈); possible duplicate records flagged; events under a year old held for review |
+| **Heatwaves** | Peer-reviewed studies (baseline) | Estimates | Five entries, each labelled excess or modelled heat-attributable deaths, with study and uncertainty |
+| **Ask Gaia** | OpenAI-compatible LLM + this backend's endpoints | Grounded LLM | Requires `GAIA_LLM_API_KEY` |
+| **Citizen reports** | SQLite | User input | |
+| **Atmospheric visual effects** | OpenWeatherMap | Live if keyed | Without the key, runs on a labelled placeholder |
+
+The verified baseline (`backend/data/historical_baseline.json`) holds 22 entries, each with source URLs and a verification date: floods and cyclones outside NCEI's scope, WMO-adjudicated records, casualty-range overlays for disputed NCEI events (e.g. Haiti 2010, Tangshan 1976), Lituya Bay's run-up record and five heatwave summers.
 
 ---
 
-*This file describes the current `main` branch. If something here looks wrong, the code is the source of truth — please open an issue or PR to fix whichever one is out of date.*
+## Removed or deferred on purpose
+
+- **Globe temperature heatmap** — removed (Oct 2026); a meaningful anomaly map needs a dense grid far beyond the free API tier. Code kept but switched off (`HEATMAP_ENABLED = False`).
+- **Costliest-disaster record** — no open, authoritative global dataset.
+- **Droughts, famines, epidemics** — outside Historical Extremes; deaths not cleanly attributable to the hazard.
+- **EM-DAT** — licence forbids online redistribution; referenced only.
+- **ReliefWeb** — awaiting an approved app name.
+
+---
+
+## Known gaps
+
+- No authentication and no CI pipeline (the 101 offline tests run manually).
+- Open-Meteo free tier (10,000 calls/day, 600/min) limits heavy use; limits surface as "unavailable", never as guessed values.
+- Historical floods, cyclones and heatwaves come from a small curated baseline, so those hazards are incomplete; heatwave studies are mostly European.
+- Global Health Index covers ~90 countries (those with a capital in `country_coords.py`).
+- Basic mobile layout only; no dedicated accessibility pass yet.
+- Disasters Phase 2 not built: search integration, nearby events on the Insight card, a Gaia disasters tool, Copernicus flood extents.
+
+---
+
+*Update this file in the same change as any feature that is added, removed or disabled.*

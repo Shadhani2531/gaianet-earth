@@ -44,6 +44,7 @@ class UIManager {
             { panelId: 'global-shi-panel', btnId: 'close-global-shi', collapseIcon: 'fa-chevron-right', expandIcon: 'fa-chevron-left' },
             { panelId: 'reports-panel', btnId: 'close-reports-panel', collapseIcon: 'fa-chevron-right', expandIcon: 'fa-chevron-left' },
             { panelId: 'gaia-panel', btnId: 'close-gaia-panel', collapseIcon: 'fa-chevron-right', expandIcon: 'fa-chevron-left' },
+            { panelId: 'disasters-panel', btnId: 'close-disasters-panel', collapseIcon: 'fa-chevron-right', expandIcon: 'fa-chevron-left' },
         ];
 
         panels.forEach(({ panelId, btnId, collapseIcon, expandIcon }) => {
@@ -132,13 +133,18 @@ class UIManager {
         reportMarkers: () => {
             window.globeManager?.setReportsVisible(false);
         },
+        disasterLayers: () => {
+            window.disastersManager?.deactivate();
+        },
     };
 
     // Single source for what each layer's legend entry looks like.
     // Satellite View is intentionally absent — it's real imagery, not a
     // severity scale, so it never gets a legend entry.
     static LAYER_LEGEND_CONFIG = {
-        'layer-temp': { label: 'Temperature Anomaly (vs. seasonal baseline)', type: 'gradient', stops: ['#08306b', '#6bafd6', '#e6e6e6', '#fd8d3c', '#a50f15'], words: ['-4°C', '-2°C', '0°C', '+2°C', '+4°C'], subLabel: 'Colder ←—— Average ——→ Warmer' },
+        // No 'layer-temp' entry: the temperature heatmap was dropped, so the
+        // Temperature toggle paints nothing on the globe (it gates the
+        // Insight card's point anomaly + Temperature History only).
         'layer-ndvi': { label: 'Vegetation (NDVI, NASA MODIS)', type: 'gradient', stops: ['#a16207', '#bebe28', '#84cc16', '#228b22', '#0a4114'], words: ['0.0', '0.2', '0.4', '0.6', '1.0'], subLabel: 'Bare/Sparse ←—— Low —— Moderate ——→ Dense' },
         'layer-wildfires': { label: 'Active wildfires', type: 'dots', stops: ['#f5b942', '#f2792e', '#e6432c', '#b31f1f', '#6e0f0f'], words: ['Low', 'Extreme (pulsing)'] },
         // 'layer-sensors' (Global Air Quality / OpenAQ), 'layer-rainfall',
@@ -207,34 +213,305 @@ class UIManager {
         }
     }
 
+    // Search bar: typeahead suggestions + full search with disambiguation.
+    //
+    // TYPEAHEAD (while typing): after >= 3 characters and a ~400 ms pause,
+    // fetch up to 6 suggestions from /geocode/suggest (Open-Meteo/GeoNames
+    // only — Nominatim is never called per keystroke, per its usage
+    // policy). Each new keystroke aborts the in-flight request, and a
+    // sequence number discards any response that arrives for an outdated
+    // query. Picking a suggestion flies to its exact lat/lon.
+    //
+    // FULL SEARCH (Enter, unless a suggestion was highlighted with the
+    // arrow keys): /geocode — Open-Meteo + Nominatim (covers small
+    // villages), qualifiers ("Aurangabad, Bihar"), and a pick-list when
+    // several real places share the name. Falls back to the old
+    // Ion/Nominatim path only if /geocode itself is unreachable.
     initSearch() {
         const searchInput = document.querySelector('.search-input');
         const searchTrigger = document.getElementById('search-trigger');
-        if (!searchInput) return;
+        const resultsEl = document.getElementById('search-results');
+        if (!searchInput || !resultsEl) return;
 
-        const runSearch = async () => {
-            const query = searchInput.value;
-            if (!query) return;
+        const SUGGEST_MIN_CHARS = 3;
+        const SUGGEST_DEBOUNCE_MS = 400;
+        const SUGGEST_LIMIT = 6;
 
-            console.log(`Searching for: ${query}`);
-            this.showNeuralScan(`SEARCHING: ${query}`);
+        let activeIndex = -1;
+        let currentCandidates = [];
+        let dropdownMode = null;        // 'suggest' | 'disambiguate' | null
+        let suggestTimer = null;
+        let suggestAbort = null;
+        let suggestSeq = 0;             // bumps on every query change
+        let currentChoose = null;       // chooser for the list currently shown
 
-            if (window.globeManager) {
-                const result = await window.globeManager.searchLocation(query);
-                if (!result) {
-                    this.showNeuralScan("Location Not Found");
-                }
-            }
+        // Stop any pending/in-flight typeahead work and invalidate responses.
+        const cancelSuggest = () => {
+            clearTimeout(suggestTimer);
+            suggestTimer = null;
+            if (suggestAbort) suggestAbort.abort();
+            suggestAbort = null;
+            suggestSeq += 1;
         };
 
-        searchInput.addEventListener('keypress', (e) => {
-            if (e.key === 'Enter') runSearch();
+        const hideResults = () => {
+            resultsEl.classList.add('hidden');
+            resultsEl.innerHTML = '';
+            activeIndex = -1;
+            currentCandidates = [];
+            dropdownMode = null;
+            currentChoose = null;
+        };
+
+        const positionResults = () => {
+            const bar = searchInput.closest('.floating-controller') || searchInput;
+            const r = bar.getBoundingClientRect();
+            resultsEl.style.left = `${r.left}px`;
+            resultsEl.style.top = `${r.bottom + 8}px`;
+            resultsEl.style.width = `${Math.max(r.width, 360)}px`;
+        };
+
+        const choose = (c) => {
+            cancelSuggest();
+            hideResults();
+            searchInput.value = c.label || c.name;
+            this.showNeuralScan(`SEARCHING: ${c.label || c.name}`);
+            window.globeManager?.flyToPlace(c);   // exact lat/lon of the pick
+        };
+
+        const highlight = (i) => {
+            const items = resultsEl.querySelectorAll('.search-result-item');
+            items.forEach((el, idx) => el.classList.toggle('active', idx === i));
+            activeIndex = i;
+            if (items[i] && items[i].scrollIntoView) items[i].scrollIntoView({ block: 'nearest' });
+        };
+
+        // Shared renderer for both modes: name, district/state, country,
+        // place type (+ population and coordinates where known).
+        const renderList = (candidates, { mode, header, hint, autoHighlight, onChoose }) => {
+            currentCandidates = candidates;
+            currentChoose = onChoose || choose;
+            dropdownMode = mode;
+            resultsEl.innerHTML = '';
+            resultsEl.dataset.mode = mode;
+
+            if (header) {
+                const h = document.createElement('div');
+                h.className = 'search-results-header';
+                h.textContent = header;
+                resultsEl.appendChild(h);
+            }
+
+            candidates.forEach((c, idx) => {
+                const item = document.createElement('div');
+                item.className = 'search-result-item';
+                item.setAttribute('role', 'option');
+                const nameEl = document.createElement('span');
+                nameEl.className = 'search-result-name';
+                nameEl.textContent = c.name;
+                const ctxEl = document.createElement('span');
+                ctxEl.className = 'search-result-context';
+                ctxEl.textContent = [c.district && c.district !== c.name ? c.district : null, c.state, c.country]
+                    .filter(Boolean).join(', ') || 'No region details';
+                const metaEl = document.createElement('span');
+                metaEl.className = 'search-result-meta';
+                const pop = c.population ? ` · pop. ${Number(c.population).toLocaleString()}` : '';
+                metaEl.textContent = `${c.kind || 'place'}${pop} · ${c.lat.toFixed(2)}°, ${c.lon.toFixed(2)}°`;
+                item.append(nameEl, ctxEl, metaEl);
+                // mousedown (not click) so it fires before the input's blur.
+                item.addEventListener('mousedown', (e) => { e.preventDefault(); currentChoose(c); });
+                // Hover is VISUAL ONLY. It must not set activeIndex: the
+                // dropdown often opens under a resting mouse cursor, and a
+                // hover-selected row would hijack a plain Enter.
+                item.addEventListener('mouseenter', () => item.classList.add('hover'));
+                item.addEventListener('mouseleave', () => item.classList.remove('hover'));
+                resultsEl.appendChild(item);
+            });
+
+            if (hint) {
+                const t = document.createElement('div');
+                t.className = 'search-results-hint';
+                t.textContent = hint;
+                resultsEl.appendChild(t);
+            }
+
+            positionResults();
+            resultsEl.classList.remove('hidden');
+            activeIndex = -1;
+            if (autoHighlight) highlight(0);
+        };
+
+        // ---- Typeahead ----
+        const fetchSuggestions = async (query, seq) => {
+            suggestAbort = new AbortController();
+            const res = await api.geocodeSuggest(query, suggestAbort.signal, SUGGEST_LIMIT);
+            // Stale: the query changed, Enter was pressed, or a pick was
+            // made while this was in flight — drop it silently.
+            if (seq !== suggestSeq || searchInput.value.trim() !== query) return;
+            suggestAbort = null;
+            const cands = (res && res.status === 'ok' && res.candidates) || [];
+            if (!cands.length) {
+                if (dropdownMode === 'suggest') hideResults();
+                return;
+            }
+            renderList(cands, {
+                mode: 'suggest',
+                header: null,
+                // No auto-highlight: plain Enter must still run the full
+                // search (Nominatim covers villages GeoNames may lack).
+                hint: 'Press Enter for full search (includes smaller places)',
+                autoHighlight: false,
+            });
+        };
+
+        const scheduleSuggest = () => {
+            cancelSuggest();
+            const query = searchInput.value.trim();
+            const namePart = query.split(',')[0].trim();
+            if (namePart.length < SUGGEST_MIN_CHARS) {
+                if (dropdownMode) hideResults();
+                return;
+            }
+            // A pick-list from a previous full search no longer matches
+            // what's typed — clear it while new suggestions load.
+            if (dropdownMode === 'disambiguate') hideResults();
+            const seq = suggestSeq;
+            suggestTimer = setTimeout(() => fetchSuggestions(query, seq), SUGGEST_DEBOUNCE_MS);
+        };
+
+        // ---- Full search (Enter) ----
+        // Restores the PRE-TYPEAHEAD resolver: Cesium ion geocoder, top
+        // result (results[0]); if ion fails or returns nothing, the old
+        // Nominatim limit=1 fallback. This is what resolved "Bhokara" and
+        // "Mahadula" correctly before. The only addition: if ion returns
+        // >= 2 results whose name EXACTLY equals the typed name (no accent
+        // folding, no near-spellings) and they are genuinely different
+        // places (> 15 km apart), show a pick-list instead of guessing.
+        // Autocomplete state is cancelled first and plays no part here.
+        const distinctPlaces = (list) => {
+            const out = [];
+            const km = (a, b) => {
+                const R = 6371, toR = Math.PI / 180;
+                const dLat = (b.lat - a.lat) * toR, dLon = (b.lon - a.lon) * toR;
+                const h = Math.sin(dLat / 2) ** 2 + Math.cos(a.lat * toR) * Math.cos(b.lat * toR) * Math.sin(dLon / 2) ** 2;
+                return 2 * R * Math.asin(Math.sqrt(h));
+            };
+            list.forEach((r) => { if (!out.some((o) => km(o, r) <= 15)) out.push(r); });
+            return out;
+        };
+
+        const chooseIon = (r) => {
+            cancelSuggest();
+            hideResults();
+            this.showNeuralScan(`SEARCHING: ${r.label}`);
+            window.globeManager?.flyToIonResult(r);
+        };
+
+        const runSearch = async () => {
+            cancelSuggest();
+            hideResults();
+            const query = searchInput.value.trim();
+            if (!query) return;
+            this.showNeuralScan(`SEARCHING: ${query}`);
+            const gm = window.globeManager;
+            if (!gm) return;
+
+            const ionResults = await gm.geocodeViaIon(query);
+            if (searchInput.value.trim() !== query) return;   // user moved on
+
+            if (ionResults.length > 0) {
+                const typedName = query.split(',')[0].trim().toLowerCase();
+                const exact = distinctPlaces(ionResults.filter((r) => r.name.toLowerCase() === typedName));
+                if (exact.length >= 2) {
+                    renderList(exact.map((r) => ({
+                        ...r,
+                        // renderList's row fields: context = rest of ion label
+                        state: r.label.split(',').slice(1).join(',').trim() || null,
+                        kind: 'place',
+                    })), {
+                        mode: 'disambiguate',
+                        header: `${exact.length} places are named “${query.split(',')[0].trim()}” — which one?`,
+                        hint: 'Tip: type “Name, State” to go straight to one.',
+                        autoHighlight: true,
+                        onChoose: chooseIon,
+                    });
+                    return;
+                }
+                return chooseIon(ionResults[0]);               // old behaviour
+            }
+
+            // Old fallback, unchanged: Nominatim limit=1 -> results[0].
+            const ok = await gm.searchLocationViaNominatim(query);
+            if (!ok) this.showNeuralScan('Location Not Found');
+        };
+
+        // ---- Events ----
+        searchInput.addEventListener('input', scheduleSuggest);
+
+        searchInput.addEventListener('keydown', (e) => {
+            const open = !resultsEl.classList.contains('hidden') && currentCandidates.length > 0;
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                // A highlighted row (via arrows/mouse, or the auto-highlight
+                // of a disambiguation list) is chosen directly; otherwise
+                // Enter runs the full search.
+                if (open && activeIndex >= 0) currentChoose(currentCandidates[activeIndex]);
+                else runSearch();
+            } else if (e.key === 'ArrowDown') {
+                if (!open) return;
+                e.preventDefault();
+                highlight(activeIndex < 0 ? 0 : Math.min(activeIndex + 1, currentCandidates.length - 1));
+            } else if (e.key === 'ArrowUp') {
+                if (!open) return;
+                e.preventDefault();
+                // Up from the first row returns focus to "just the text",
+                // so Enter runs a full search again.
+                if (activeIndex <= 0) highlight(-1);
+                else highlight(activeIndex - 1);
+            } else if (e.key === 'Escape') {
+                cancelSuggest();
+                hideResults();
+            }
         });
 
-        // The magnifying glass was purely decorative before — clicking it
-        // now triggers the same search as pressing Enter.
+        searchInput.addEventListener('blur', () => setTimeout(() => {
+            if (document.activeElement !== searchInput) {
+                cancelSuggest();
+                hideResults();
+            }
+        }, 150));
+
+        window.addEventListener('resize', () => {
+            if (!resultsEl.classList.contains('hidden')) positionResults();
+        });
+
+        // The magnifying glass triggers the same full search as Enter.
         if (searchTrigger) {
             searchTrigger.addEventListener('click', runSearch);
+        }
+    }
+
+    // Insight header: which exact place these readings belong to.
+    // Coordinates are always shown — they are the real identity; the name
+    // is a label (from the picked search result or a reverse lookup).
+    updatePlaceLabel(place, lat, lon, loading) {
+        const nameEl = document.getElementById('insight-place-name');
+        const coordsEl = document.getElementById('insight-place-coords');
+        if (!nameEl || !coordsEl) return;
+        const ns = lat >= 0 ? 'N' : 'S';
+        const ew = lon >= 0 ? 'E' : 'W';
+        coordsEl.textContent = `${Math.abs(lat).toFixed(3)}°${ns}, ${Math.abs(lon).toFixed(3)}°${ew}`;
+        if (loading) {
+            nameEl.textContent = 'Identifying place…';
+            nameEl.classList.add('muted');
+        } else if (place && place.status === 'ok' && place.label) {
+            nameEl.textContent = place.label;
+            nameEl.classList.remove('muted');
+            nameEl.title = place.source ? `Place name: ${place.source}` : '';
+        } else {
+            nameEl.textContent = 'Unnamed location';
+            nameEl.classList.add('muted');
+            nameEl.title = 'No place name found for these coordinates';
         }
     }
 
@@ -434,6 +711,13 @@ class UIManager {
         const gauge = document.querySelector('.shi-gauge');
         const value = document.getElementById('shi-value');
         const statusText = document.getElementById('shi-gauge-status-text');
+        if (score === null || score === undefined) {
+            // No real AQI -> no SHI. Show that plainly instead of a number.
+            if (value) value.innerText = '--';
+            if (gauge) gauge.classList.remove('shi-gauge-healthy', 'shi-gauge-moderate', 'shi-gauge-poor');
+            if (statusText) statusText.innerText = 'Current Ecological Stability: no air-quality data';
+            return;
+        }
         if (value) value.innerText = Math.round(score);
 
         const risk = riskLabel || (score >= 80 ? 'Healthy' : score >= 50 ? 'Moderate' : 'Poor');
@@ -489,15 +773,17 @@ class UIManager {
         // Before/after SHI comparison
         const before = result.shi_before;
         const after = result.shi_after;
-        document.getElementById('shi-before-val').innerText = before.shi;
+        document.getElementById('shi-before-val').innerText = before.shi ?? '--';
         document.getElementById('shi-before-risk').innerText = before.risk;
-        document.getElementById('shi-after-val').innerText = after.shi;
+        document.getElementById('shi-after-val').innerText = after.shi ?? '--';
         document.getElementById('shi-after-risk').innerText = after.risk;
 
         const afterSide = document.getElementById('shi-after-val').closest('.shi-compare-side');
         afterSide.classList.remove('worse', 'better');
-        if (after.shi < before.shi) afterSide.classList.add('worse');
-        else if (after.shi > before.shi) afterSide.classList.add('better');
+        if (before.shi !== null && after.shi !== null) {
+            if (after.shi < before.shi) afterSide.classList.add('worse');
+            else if (after.shi > before.shi) afterSide.classList.add('better');
+        }
 
         // Also reflect the projected SHI on the main right-panel gauge,
         // so the "what if" outcome is visible at a glance app-wide. This
@@ -752,6 +1038,7 @@ class UIManager {
             'globalShi': document.getElementById('global-shi-panel'),
             'prediction': document.getElementById('prediction-panel'),
             'gaia': document.getElementById('gaia-panel'),
+            'disasters': document.getElementById('disasters-panel'),
             'intelligence': document.querySelector('.layer-group'), 
             'shi_gauge': document.querySelector('.shi-gauge-container'),
             // NOTE: previously also included 'charts':
@@ -831,6 +1118,11 @@ class UIManager {
             case 'global-shi':
                 if(uiElements.globalShi) uiElements.globalShi.classList.remove('hidden');
                 this.loadGlobalShi();
+                break;
+
+            case 'disasters':
+                if(uiElements.disasters) uiElements.disasters.classList.remove('hidden');
+                window.disastersManager?.activate();
                 break;
 
             case 'gaia':
@@ -1305,7 +1597,7 @@ class UIManager {
     // _setStatBadge() for how this gets attached next to a stat element.
     _dataSourceBadge(source) {
         if (!source) return null;
-        const live = new Set(['live_waqi', 'real_openmeteo', 'real_modis', 'live']);
+        const live = new Set(['live_waqi', 'live_openaq', 'real_openmeteo', 'real_modis', 'live']);
         const isLive = live.has(source);
         return {
             label: isLive ? 'LIVE' : 'EST',
@@ -1387,13 +1679,15 @@ class UIManager {
             return;
         }
 
-        strip.innerHTML = forecastData.days.map(day => {
+        strip.innerHTML = forecastData.days.map((day, idx) => {
             const date = new Date(day.date + 'T00:00:00');
-            const label = date.toLocaleDateString('default', { weekday: 'short' });
+            const label = idx === 0 ? 'Today' : date.toLocaleDateString('default', { weekday: 'short' });
+            const dateLabel = date.toLocaleDateString('default', { day: 'numeric', month: 'short' });
             const precip = day.precipitation_mm ?? 0;
             return `
-                <div class="forecast-day" title="${day.date}">
+                <div class="forecast-day" title="${date.toLocaleDateString('default', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })}">
                     <span class="forecast-day-label">${label}</span>
+                    <span class="forecast-day-date">${dateLabel}</span>
                     <i class="fa-solid ${this._precipIcon(precip)} forecast-day-icon"></i>
                     <span class="forecast-day-temp">${day.temp_max_c ?? '--'}° / ${day.temp_min_c ?? '--'}°</span>
                     <span class="forecast-day-precip">${precip}mm</span>
@@ -1460,9 +1754,11 @@ class UIManager {
             return;
         }
 
-        const labels = aqiForecastData.days.map(d => {
+        // Two-line axis labels: weekday + date (Chart.js renders arrays as lines).
+        const labels = aqiForecastData.days.map((d, idx) => {
             const date = new Date(d.date + 'T00:00:00');
-            return date.toLocaleDateString('default', { weekday: 'short' });
+            return [idx === 0 ? 'Today' : date.toLocaleDateString('default', { weekday: 'short' }),
+                    date.toLocaleDateString('default', { day: 'numeric', month: 'short' })];
         });
         const values = aqiForecastData.days.map(d => d.aqi_max);
         const colors = values.map(v => this._aqiColor(v));
@@ -1509,6 +1805,37 @@ class UIManager {
     // measurement nor a degraded fallback; labeling it EST would be
     // misleading in the other direction. Used by both the right-panel
     // stat and the Insight card's wildfire node.
+    // Human timezone label: Open-Meteo's abbreviation is often an offset
+    // ("GMT+5:30"); for India use "IST", otherwise ask the browser for the
+    // short name of the IANA zone, falling back to Open-Meteo's string.
+    _tzShortName(ianaTz, fallbackAbbr) {
+        if (ianaTz === 'Asia/Kolkata' || ianaTz === 'Asia/Calcutta') return 'IST';
+        try {
+            if (ianaTz) {
+                const part = new Intl.DateTimeFormat('en-US', { timeZone: ianaTz, timeZoneName: 'short' })
+                    .formatToParts(new Date()).find(p => p.type === 'timeZoneName');
+                if (part && !/^GMT[+-]/.test(part.value)) return part.value;
+            }
+        } catch (e) { /* invalid zone -> fall through */ }
+        return fallbackAbbr || '';
+    }
+
+    // ARCHIVE badge — real recorded data, but historical (lagged), so
+    // neither LIVE nor EST.
+    _setArchiveBadge(valueElId, title) {
+        const valueEl = document.getElementById(valueElId);
+        if (!valueEl) return;
+        let badge = valueEl.parentElement.querySelector(`.data-source-badge[data-for="${valueElId}"]`);
+        if (!badge) {
+            badge = document.createElement('span');
+            badge.dataset.for = valueElId;
+            valueEl.insertAdjacentElement('afterend', badge);
+        }
+        badge.className = 'data-source-badge archive';
+        badge.textContent = 'ARCHIVE';
+        badge.title = title;
+    }
+
     _setFormulaBadge(valueElId, title) {
         const valueEl = document.getElementById(valueElId);
         if (!valueEl) return;
@@ -1517,9 +1844,12 @@ class UIManager {
             badge = document.createElement('span');
             badge.className = 'data-source-badge formula';
             badge.dataset.for = valueElId;
-            badge.textContent = 'FORMULA';
             valueEl.insertAdjacentElement('afterend', badge);
         }
+        // Always (re)set class + text: the same element may previously
+        // have been a LIVE/EST badge created by _setStatBadge.
+        badge.className = 'data-source-badge formula';
+        badge.textContent = 'FORMULA';
         badge.title = title;
     }
 
@@ -1556,16 +1886,19 @@ class UIManager {
 
         // Update Summary
         const location = climateData.location;
-        const _anomalySign = climateData.current_anomaly > 0 ? '+' : '';
+        const _anom = climateData.current_anomaly;
+        const _anomalyHtml = (_anom === null || _anom === undefined)
+            ? '<span style="color:var(--text-secondary)">n/a</span>'
+            : `<span style="color:${_anom > 0 ? 'var(--danger)' : 'var(--accent-color)'}">${_anom > 0 ? '+' : ''}${_anom.toFixed(2)}°C</span>`;
         let summaryHtml = `
             <p><i class="fa-solid fa-location-dot"></i> Lat: ${location.lat.toFixed(2)}°, Lon: ${location.lon.toFixed(2)}°</p>
-            <p><strong>Anomaly:</strong> <span style="color:${climateData.current_anomaly > 0 ? 'var(--danger)' : 'var(--accent-color)'}">${_anomalySign}${climateData.current_anomaly.toFixed(2)}°C</span></p>
+            <p><strong>Anomaly:</strong> ${_anomalyHtml}</p>
         `;
         
         if (shiData) {
             summaryHtml += `
                 <div style="margin-top: 10px; padding: 10px; border-radius: 6px; background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1);">
-                    <strong>Local SHI:</strong> ${shiData.shi}/100 (${shiData.grade})
+                    <strong>Local SHI:</strong> ${shiData.shi === null || shiData.shi === undefined ? 'n/a (no air-quality data)' : `${shiData.shi}/100 (${shiData.grade})`}
                     <p style="font-size: 0.8rem; color: var(--text-secondary); margin: 0;">Status: ${shiData.risk}</p>
                 </div>
             `;
@@ -1672,40 +2005,95 @@ class UIManager {
             const history = climateData.historical_trends;
             const latest = history[history.length - 1];
 
-            document.getElementById('node-temp').innerText = `${latest.avg_temp_c}°C`;
+            // Temperature = model-based CURRENT conditions at the exact
+            // clicked coordinates (Open-Meteo current=, see backend
+            // services/current_conditions.py) — same approach weather apps
+            // use. It used to show latest.avg_temp_c, which is the latest
+            // MONTH's average of daily MAXIMUM temperatures (several °C
+            // above the actual current temperature most of the day).
+            const cur = climateData.current || {};
+            const curTemp = (cur.temperature_c === null || cur.temperature_c === undefined) ? null : cur.temperature_c;
+            const tempValueEl = document.getElementById('node-temp');
+            const tempIconEl = document.getElementById('node-temp-icon');
+            const tempSubEl = document.getElementById('node-temp-sub');
+            if (tempValueEl) tempValueEl.innerText = curTemp === null ? 'n/a' : `${curTemp.toFixed(1)}°C`;
+            if (tempSubEl) {
+                if (curTemp === null) {
+                    tempSubEl.textContent = 'Current temperature unavailable right now';
+                } else {
+                    const parts = [];
+                    if (cur.feels_like_c !== null && cur.feels_like_c !== undefined) parts.push(`Feels like ${cur.feels_like_c.toFixed(1)}°`);
+                    if (cur.observation_time) {
+                        const hhmm = cur.observation_time.slice(11, 16);
+                        parts.push(`as of ${hhmm} ${this._tzShortName(cur.timezone, cur.timezone_abbreviation)}`.trim());
+                    }
+                    tempSubEl.textContent = parts.join(' · ');
+                }
+            }
             document.getElementById('node-precip').innerText = `${latest.total_rainfall_mm}mm`;
+            // This is the latest month's RECORDED total from the archive
+            // (which lags ~5 days) — not rain falling now. Say so.
+            const precipSubEl = document.getElementById('node-precip-sub');
+            if (precipSubEl) {
+                const [yy, mm] = (latest.month || '').split('-').map(Number);
+                const monthName = (yy && mm) ? new Date(yy, mm - 1, 15).toLocaleDateString(undefined, { month: 'short' }) : '';
+                let label = monthName ? `${monthName} total` : 'Monthly total';
+                if (latest.data_through && yy && mm) {
+                    const throughDay = Number(latest.data_through.slice(8, 10));
+                    const daysInMonth = new Date(yy, mm, 0).getDate();
+                    if (throughDay < daysInMonth) label += ` (to ${throughDay} ${monthName})`;
+                }
+                precipSubEl.textContent = label;
+            }
 
             // Temperature band: colors the value + swaps the icon, purely a
             // visual read of the same real number already shown.
-            const tempBand = this._tempBand(latest.avg_temp_c);
-            const tempValueEl = document.getElementById('node-temp');
-            const tempIconEl = document.getElementById('node-temp-icon');
-            if (tempValueEl) tempValueEl.style.color = tempBand.color;
-            if (tempIconEl) {
-                tempIconEl.className = `fa-solid ${tempBand.icon} data-node-icon`;
-                tempIconEl.style.color = tempBand.color;
+            if (curTemp !== null) {
+                const tempBand = this._tempBand(curTemp);
+                if (tempValueEl) tempValueEl.style.color = tempBand.color;
+                if (tempIconEl) {
+                    tempIconEl.className = `fa-solid ${tempBand.icon} data-node-icon`;
+                    tempIconEl.style.color = tempBand.color;
+                }
+            } else {
+                if (tempValueEl) tempValueEl.style.color = '';
+                if (tempIconEl) tempIconEl.style.color = '';
             }
 
             // Rainfall icon: same mm->icon mapping as the 7-day forecast
             // strip, so a given rainfall amount always reads the same way.
             const precipIconEl = document.getElementById('node-precip-icon');
             if (precipIconEl) {
-                precipIconEl.className = `fa-solid ${this._precipIcon(latest.total_rainfall_mm)} data-node-icon`;
+                // Neutral icon: _precipIcon's thresholds are for DAILY mm, so
+                // a monthly total would wrongly show a "heavy rain now" icon.
+                precipIconEl.className = 'fa-solid fa-droplet data-node-icon';
             }
 
             // Anomaly is a delta from a seasonal baseline, not an absolute
             // temperature — showing it as a bare number ("7.67°C") reads
             // like a temperature reading, not a departure from normal.
             // An explicit sign makes clear which direction it's off by.
-            const anomaly = climateData.current_anomaly;
+            // Real anomaly: recent 7-day mean vs the 1991-2020 mean for the
+            // same calendar days, both from the same reanalysis archive
+            // (see current_conditions.get_temperature_anomaly). null when
+            // it can't be computed — shown as "n/a", never a placeholder.
+            const anomalyInfo = climateData.anomaly || {};
+            const anomalyRaw = climateData.current_anomaly;
+            const anomalyAvailable = anomalyRaw !== null && anomalyRaw !== undefined;
+            const anomaly = anomalyAvailable ? anomalyRaw : 0; // 0 only drives the empty bar below
             const anomalySign = anomaly > 0 ? '+' : (anomaly < 0 ? '' : '±'); // toFixed already includes '-' for negatives
-            document.getElementById('node-anomaly').innerText = `${anomalySign}${anomaly.toFixed(2)}°C`;
+            document.getElementById('node-anomaly').innerText = anomalyAvailable
+                ? `${anomalySign}${anomaly.toFixed(2)}°C` : 'n/a';
 
             const subEl = document.getElementById('node-anomaly-sub');
             if (subEl) {
-                subEl.textContent = anomaly > 0.05 ? 'Warmer than historical average'
-                    : anomaly < -0.05 ? 'Colder than historical average'
-                    : 'Near historical average';
+                if (!anomalyAvailable) {
+                    subEl.textContent = 'Could not compute vs 1991–2020 baseline';
+                } else {
+                    const fmtD = (iso) => iso ? new Date(`${iso}T12:00:00`).toLocaleDateString(undefined, { day: 'numeric', month: 'short' }) : '';
+                    const dir = anomaly > 0.05 ? 'Warmer than' : anomaly < -0.05 ? 'Colder than' : 'Near';
+                    subEl.textContent = `${dir} 1991–2020 avg · ${fmtD(anomalyInfo.window_start)}–${fmtD(anomalyInfo.window_end)}`;
+                }
             }
 
             // Zero-centered diverging bar: magnitude scaled against a fixed
@@ -1731,22 +2119,75 @@ class UIManager {
             // climateData.data_source is "real_openmeteo" or
             // "estimated_fallback" — applies to temp/rainfall/anomaly,
             // all three of which come from the same Open-Meteo call.
-            this._setStatBadge('node-temp', climateData.data_source);
-            this._setStatBadge('node-precip', climateData.data_source);
-            this._setStatBadge('node-anomaly', climateData.data_source);
+            // Temperature: LIVE only when current conditions actually came
+            // back; no badge at all when unavailable (EST would imply a
+            // fallback number is being shown, and none is).
+            this._setStatBadge('node-temp', curTemp !== null ? cur.data_source : null);
+            const tempBadge = document.querySelector('.data-source-badge[data-for="node-temp"]');
+            if (tempBadge && curTemp !== null) {
+                tempBadge.title = 'Model-based current conditions at these exact coordinates (Open-Meteo, ~15-min resolution). '
+                    + 'Weather apps use similar models, so small differences (1–2 °C) between apps are normal.';
+            }
+            // Recorded archive data, not a live reading: ARCHIVE badge
+            // (EST only if the synthetic fallback fired).
+            if (climateData.data_source === 'real_openmeteo') {
+                this._setArchiveBadge('node-precip', 'Recorded daily totals summed for the month '
+                    + '(Open-Meteo historical archive, ~5-day lag). Not current rainfall.');
+            } else {
+                this._setStatBadge('node-precip', climateData.data_source);
+            }
+            // Anomaly is a derived comparison of real data, not a direct
+            // reading (and the archive lags ~5 days) — FORMULA, not LIVE.
+            this._setFormulaBadge('node-anomaly', anomalyAvailable
+                ? `Recent mean ${anomalyInfo.recent_mean_c}°C minus ${anomalyInfo.baseline_period} mean ${anomalyInfo.baseline_mean_c}°C `
+                  + `for the same calendar days (${anomalyInfo.window_start} to ${anomalyInfo.window_end}). ${anomalyInfo.source || ''}`
+                : `Unavailable: ${anomalyInfo.reason || 'baseline could not be computed'}`);
 
             if (envData) {
-                document.getElementById('node-aqi').innerText = envData.air_quality_index ?? '--';
+                // AQI: nearest WAQI station within 50 km and < 24 h old, or
+                // honest "n/a" with the reason — never the old silent 100.
+                const aqiVal = envData.air_quality_index;
+                const aqiAvailable = aqiVal !== null && aqiVal !== undefined;
+                document.getElementById('node-aqi').innerText = aqiAvailable ? aqiVal : 'n/a';
                 document.getElementById('node-co2').innerText = envData.co2_ppm ? `${envData.co2_ppm}` : '--';
-                this._setStatBadge('node-aqi', envData.data_source);
+                this._setStatBadge('node-aqi', aqiAvailable ? envData.data_source : null);
+                // Source chain: WAQI station -> OpenAQ station -> Open-Meteo
+                // CAMS model (EST). Tooltip states the source actually used
+                // and why earlier ones were skipped.
+                const aqiBadge = document.querySelector('.data-source-badge[data-for="node-aqi"]');
+                if (aqiBadge && aqiAvailable) {
+                    const st = envData.aqi_station;
+                    let tip = envData.aqi_source || 'Air-quality source';
+                    if (st) {
+                        tip += `: ${st.name || 'unknown station'}`
+                            + (st.distance_km !== null && st.distance_km !== undefined ? ` · ${st.distance_km} km away` : '');
+                    } else if (envData.data_source === 'model_openmeteo') {
+                        tip += ' — model estimate for this grid cell, not a station measurement';
+                    }
+                    if (envData.aqi_observed_at) tip += ` · observed ${envData.aqi_observed_at}`;
+                    if (envData.aqi_basis === 'pm25') tip += ' · AQI computed from PM2.5 only';
+                    if (envData.aqi_attempts && envData.aqi_attempts.length) tip += `\nSkipped: ${envData.aqi_attempts.join('; ')}`;
+                    aqiBadge.title = tip;
+                }
                 this._setStatBadge('node-co2', 'live'); // real NOAA GML reading, see stat-co2 above
 
                 // AQI color + category, reusing the same _aqiColor() scale
                 // already driving the forecast chart bars and globe dots.
                 const aqiValueEl = document.getElementById('node-aqi');
                 const aqiSubEl = document.getElementById('node-aqi-sub');
-                if (aqiValueEl) aqiValueEl.style.color = this._aqiColor(envData.air_quality_index);
-                if (aqiSubEl) aqiSubEl.textContent = this._aqiCategory(envData.air_quality_index);
+                if (aqiValueEl) aqiValueEl.style.color = aqiAvailable ? this._aqiColor(aqiVal) : '';
+                if (aqiSubEl) {
+                    if (aqiAvailable) {
+                        const st = envData.aqi_station || {};
+                        const short = { live_waqi: 'WAQI', live_openaq: 'OpenAQ', model_openmeteo: 'CAMS model' }[envData.data_source] || '';
+                        let srcTxt = short;
+                        if (st.distance_km !== null && st.distance_km !== undefined) srcTxt += ` ${st.distance_km} km`;
+                        if (envData.aqi_basis === 'pm25') srcTxt += ' · PM2.5';
+                        aqiSubEl.textContent = this._aqiCategory(aqiVal) + (srcTxt ? ` · ${srcTxt}` : '');
+                    } else {
+                        aqiSubEl.textContent = envData.aqi_reason || 'No valid air-quality reading nearby';
+                    }
+                }
 
                 // CO2 context bar: fixed 280ppm (pre-industrial) -> 450ppm
                 // rail with a marker at the real reading.
@@ -1766,21 +2207,30 @@ class UIManager {
             }
 
             if (shiData) {
-                document.getElementById('insight-shi-value').innerText = shiData.shi;
-                document.getElementById('insight-shi-risk').innerText = shiData.risk;
+                const shiAvailable = shiData.shi !== null && shiData.shi !== undefined;
+                document.getElementById('insight-shi-value').innerText = shiAvailable ? shiData.shi : '--';
+                const shiSrcShort = { live_waqi: 'WAQI', live_openaq: 'OpenAQ', model_openmeteo: 'CAMS model' }[shiData.data_source];
+                document.getElementById('insight-shi-risk').innerText = shiAvailable
+                    ? (shiSrcShort ? `${shiData.risk} · via ${shiSrcShort}` : shiData.risk)
+                    : 'No air-quality data';
 
                 const badge = document.getElementById('insight-shi-badge');
                 badge.classList.remove('risk-healthy', 'risk-moderate', 'risk-poor');
-                if (shiData.shi >= 80) badge.classList.add('risk-healthy');
-                else if (shiData.shi >= 50) badge.classList.add('risk-moderate');
-                else badge.classList.add('risk-poor');
+                if (shiAvailable) {
+                    if (shiData.shi >= 80) badge.classList.add('risk-healthy');
+                    else if (shiData.shi >= 50) badge.classList.add('risk-moderate');
+                    else badge.classList.add('risk-poor');
+                }
+                badge.title = shiAvailable
+                    ? `Derived from AQI (${shiData.aqi_source || 'source unknown'})`
+                    : (shiData.reason || 'No valid AQI reading near this location');
 
                 // Ring gauge: circumference of r=26 is 2*pi*26 ~= 163.4;
                 // dashoffset 0 = full ring, 163.4 = empty ring.
                 const ringFillEl = document.getElementById('insight-shi-ring-fill');
                 if (ringFillEl) {
                     const CIRCUMFERENCE = 163.4;
-                    const shiPct = Math.min(Math.max(shiData.shi, 0), 100) / 100;
+                    const shiPct = shiAvailable ? Math.min(Math.max(shiData.shi, 0), 100) / 100 : 0;
                     ringFillEl.style.strokeDashoffset = `${CIRCUMFERENCE * (1 - shiPct)}`;
                 }
             }
@@ -2073,6 +2523,82 @@ class UIManager {
                     `Rainfall change: ${sign}${pctChange.toFixed(1)}% (annual total, ${earliest.year} to ${latest.year})`;
             }
         }
+    }
+
+    // Rain Probability: renders /rain-probability (Open-Meteo NWP PoP).
+    // Always FORECAST provenance (static badge in index.html). A null
+    // probability is shown as "n/a" — never as 0% — because "0% chance"
+    // and "the model gave no probability here" are different claims.
+    updateRainProbabilityNode(data) {
+        const todayEl = document.getElementById('rain-prob-today');
+        const subEl = document.getElementById('rain-prob-sub');
+        const hourlyEl = document.getElementById('rain-prob-hourly');
+        const dailyEl = document.getElementById('rain-prob-daily');
+        const emptyEl = document.getElementById('rain-prob-empty');
+        if (!todayEl || !hourlyEl || !dailyEl) return;
+
+        const fmt = (v) => (v === null || v === undefined) ? 'n/a' : `${Math.round(v)}%`;
+        const clear = () => {
+            todayEl.textContent = '--';
+            if (subEl) subEl.textContent = '';
+            hourlyEl.innerHTML = '';
+            dailyEl.innerHTML = '';
+        };
+
+        if (!data || data.status === 'unavailable' || data.status === 'no_probability') {
+            clear();
+            if (emptyEl) {
+                emptyEl.textContent = (data && data.status === 'no_probability')
+                    ? 'The forecast model provides no rain probability for this location.'
+                    : 'Rain probability not available right now (forecast service unreachable).';
+                emptyEl.classList.remove('hidden');
+            }
+            return;
+        }
+        if (emptyEl) emptyEl.classList.add('hidden');
+
+        todayEl.textContent = fmt(data.today_max_pct);
+        if (subEl) {
+            const tz = data.timezone ? ` · local time (${data.timezone})` : '';
+            subEl.textContent = `Today's max · next 24h max: ${fmt(data.next_24h_max_pct)}${tz} · Open-Meteo`;
+        }
+
+        // Next-24h hourly strip: bar height = probability; null hours get
+        // a hatched "no data" bar rather than an empty (= 0%) one.
+        hourlyEl.innerHTML = '';
+        (data.next_24h || []).forEach((h, idx) => {
+            const bar = document.createElement('div');
+            const p = h.probability_pct;
+            const hour = (h.time || '').slice(11, 13);
+            bar.className = 'rain-prob-bar' + (p === null || p === undefined ? ' no-data' : '');
+            bar.style.height = (p === null || p === undefined) ? '100%' : `${Math.max(4, p)}%`;
+            bar.title = `${hour}:00 — ${fmt(p)}` +
+                ((h.precipitation_mm !== null && h.precipitation_mm !== undefined) ? ` · ${h.precipitation_mm} mm` : '');
+            if (idx % 6 === 0) bar.dataset.hour = hour;
+            hourlyEl.appendChild(bar);
+        });
+
+        // 7-day row: weekday + daily max probability.
+        dailyEl.innerHTML = '';
+        (data.daily || []).forEach((d, idx) => {
+            const cell = document.createElement('div');
+            cell.className = 'rain-prob-day';
+            const dt = new Date(`${d.date}T12:00:00`);
+            const name = idx === 0 ? 'Today' : dt.toLocaleDateString(undefined, { weekday: 'short' });
+            const nameEl = document.createElement('span');
+            nameEl.className = 'rain-prob-day-name';
+            nameEl.textContent = name;
+            const dateEl = document.createElement('span');
+            dateEl.className = 'rain-prob-day-date';
+            dateEl.textContent = dt.toLocaleDateString(undefined, { day: 'numeric', month: 'short' });
+            const valEl = document.createElement('span');
+            valEl.className = 'rain-prob-day-val';
+            valEl.textContent = fmt(d.probability_max_pct);
+            cell.title = (d.precipitation_sum_mm !== null && d.precipitation_sum_mm !== undefined)
+                ? `Forecast total: ${d.precipitation_sum_mm} mm` : 'Forecast total: n/a';
+            cell.append(nameEl, dateEl, valEl);
+            dailyEl.appendChild(cell);
+        });
     }
 
     // Active Wildfires: surfaces data that was already being fetched on

@@ -141,6 +141,19 @@ def _pm25_to_aqi(pm25: float) -> int:
     return 500
 
 
+def _aqi_to_pm25(aqi: float) -> float:
+    """Inverse of _pm25_to_aqi: US EPA PM2.5 AQI sub-index -> ug/m3.
+    Needed because WAQI's iaqi.pm25.v is the AQI SUB-INDEX, not a
+    concentration — feeding it to the scenario engine as ug/m3 was wrong."""
+    aqi = max(0.0, float(aqi))
+    for (lo_val, hi_val), (lo_aqi, hi_aqi) in _PM25_BREAKPOINTS:
+        if lo_aqi <= aqi <= hi_aqi:
+            return round(((hi_val - lo_val) / (hi_aqi - lo_aqi)) * (aqi - lo_aqi) + lo_val, 1)
+        if aqi < lo_aqi:  # falls in the 1-point gap between bands
+            return round(lo_val, 1)
+    return 500.4
+
+
 # ---------------------------------------------------------------------------
 # 3. RESULT TYPES
 # ---------------------------------------------------------------------------
@@ -148,8 +161,8 @@ def _pm25_to_aqi(pm25: float) -> int:
 @dataclass
 class MetricChange:
     metric: str                # e.g. "temperature_c", "co2_ppm", "aqi"
-    current_value: float
-    projected_value: float
+    current_value: Optional[float]
+    projected_value: Optional[float]
     delta: float
     unit: str
     confidence: Confidence
@@ -171,7 +184,7 @@ class ScenarioResult:
 # ---------------------------------------------------------------------------
 
 def apply_deforestation_scenario(
-    current_temp_c: float,
+    current_temp_c: Optional[float],
     current_co2_ppm: float,
     forest_loss_pct: float,
     is_tropical: bool = True,
@@ -211,8 +224,8 @@ def apply_deforestation_scenario(
 
     changes.append(MetricChange(
         metric="temperature_c",
-        current_value=round(current_temp_c, 2),
-        projected_value=round(current_temp_c + warming_c, 2),
+        current_value=round(current_temp_c, 2) if current_temp_c is not None else None,
+        projected_value=round(current_temp_c + warming_c, 2) if current_temp_c is not None else None,
         delta=round(warming_c, 2),
         unit="°C",
         confidence="estimated",
@@ -384,20 +397,31 @@ def run_scenario(
 
     if forest_loss_pct > 0:
         all_changes.extend(apply_deforestation_scenario(
-            current_temp_c=current_data.get("temperature_c", 25.0),
+            current_temp_c=current_data.get("temperature_c"),
             current_co2_ppm=current_data.get("co2_ppm", 420.0),
             forest_loss_pct=forest_loss_pct,
             is_tropical=is_tropical,
         ))
 
+    # Emissions scenario needs a REAL current PM2.5/AQI reading. No hidden
+    # 35.0 / 100 defaults: if there is no reading, the scenario is skipped
+    # and the narrative says so.
+    emissions_skipped = False
     if emissions_increase_pct > 0:
-        all_changes.extend(apply_emissions_scenario(
-            current_pm25=current_data.get("pm25", 35.0),
-            current_aqi=current_data.get("aqi", 100),
-            emissions_increase_pct=emissions_increase_pct,
-        ))
+        if current_data.get("pm25") is not None and current_data.get("aqi") is not None:
+            all_changes.extend(apply_emissions_scenario(
+                current_pm25=current_data["pm25"],
+                current_aqi=current_data["aqi"],
+                emissions_increase_pct=emissions_increase_pct,
+            ))
+        else:
+            emissions_skipped = True
 
     narrative = build_narrative(all_changes, forest_loss_pct, emissions_increase_pct)
+    if emissions_skipped:
+        narrative = (narrative + " " if narrative else "") + (
+            "The emissions scenario was not run: there is no real air-quality "
+            "reading near this location to project from.")
 
     return ScenarioResult(
         location=location,

@@ -22,7 +22,7 @@
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
 
     <!-- Custom CSS -->
-    <link rel="stylesheet" href="css/style.css?v=14">
+    <link rel="stylesheet" href="css/style.css?v=24">
 </head>
 <body>
 
@@ -45,9 +45,14 @@
     <!-- Floating Top Controller -->
     <div class="floating-controller glass-panel shimmer-edge">
         <i id="search-trigger" class="fa-solid fa-magnifying-glass"></i>
-        <input type="text" class="search-input" placeholder="Search Location or Simulation Scenario...">
+        <input type="text" class="search-input" placeholder="Search Location or Simulation Scenario..." autocomplete="off" spellcheck="false" aria-autocomplete="list" aria-controls="search-results">
         <button id="scenario-btn" class="btn primary-btn"><i class="fa-solid fa-flask"></i> LAB</button>
     </div>
+
+    <!-- Place pick-list: shown when a searched name matches more than one
+         real place (e.g. Aurangabad, Maharashtra vs Aurangabad, Bihar).
+         Positioned under the search bar by ui.js. -->
+    <div id="search-results" class="search-results glass-panel hidden" role="listbox" aria-label="Matching places"></div>
 
     <!-- Neural Scan Overlay -->
     <div id="neural-overlay" class="neural-overlay hidden">
@@ -86,6 +91,9 @@
         </div>
         <div class="tab-item" data-tab="global-shi" title="Global Health Index">
             <i class="fa-solid fa-globe"></i>
+        </div>
+        <div class="tab-item" data-tab="disasters" title="Disasters &amp; Hazards">
+            <i class="fa-solid fa-triangle-exclamation"></i>
         </div>
         <div class="tab-item" data-tab="gaia" title="Ask Gaia">
             <i class="fa-solid fa-comment-dots"></i>
@@ -251,6 +259,12 @@
             <button id="close-insight" class="close-btn"><i class="fa-solid fa-times"></i></button>
             <div id="insight-header">
                 <h3 id="insight-title"><i class="fa-solid fa-satellite"></i> Insight</h3>
+                <!-- Which exact place these readings are for: full name with
+                     district/state/country + coordinates (the real identity). -->
+                <div class="insight-place" id="insight-place">
+                    <span class="insight-place-name" id="insight-place-name"></span>
+                    <span class="insight-place-coords" id="insight-place-coords"></span>
+                </div>
             </div>
 
             <!-- SHI badge: this location's Sustainability Health Index, shown
@@ -277,6 +291,7 @@
                         <i class="fa-solid fa-temperature-half data-node-icon" id="node-temp-icon"></i>
                         <span class="value" id="node-temp">--°C</span>
                     </span>
+                    <span class="data-node-sub" id="node-temp-sub"></span>
                 </div>
                 <div class="data-node">
                     <span class="label">Air Quality (AQI)</span>
@@ -298,6 +313,7 @@
                         <i class="fa-solid fa-sun data-node-icon" id="node-precip-icon"></i>
                         <span class="value" id="node-precip">--mm</span>
                     </span>
+                    <span class="data-node-sub" id="node-precip-sub"></span>
                 </div>
                 <div class="data-node">
                     <span class="label">Temp Anomaly</span>
@@ -353,7 +369,7 @@
                  yearly comparison, gated by the Temperature (Anomaly)
                  toggle, same pattern as Vegetation History below. -->
             <div class="temp-history-section" id="temp-history-section">
-                <span class="label">Temperature History (°C)</span>
+                <span class="label">Temperature History (°C · 7-day mean, same week each year)</span>
                 <div class="chart-container" style="height: 130px;">
                     <canvas id="tempHistoryChart"></canvas>
                 </div>
@@ -374,6 +390,22 @@
                  globe layer — gated by the same "Rainfall
                  (Precipitation)" toggle. -->
             <div class="rainfall-history-section" id="rainfall-history-section">
+                <!-- Rain Probability: real probability of precipitation (PoP)
+                     from Open-Meteo NWP (/rain-probability). Badged FORECAST,
+                     never LIVE — it is a model prediction, not a measurement.
+                     Null values render as "n/a", never as 0%. Populated by
+                     ui.updateRainProbabilityNode(). -->
+                <div class="rain-prob-block" id="rain-prob-block">
+                    <span class="label">Chance of Rain</span>
+                    <div class="rain-prob-headline">
+                        <span class="rain-prob-value" id="rain-prob-today">--</span>
+                        <span class="data-source-badge forecast" title="Model forecast (Open-Meteo NWP), not a measurement">FORECAST</span>
+                    </div>
+                    <span class="data-node-sub" id="rain-prob-sub"></span>
+                    <div class="rain-prob-strip" id="rain-prob-hourly" aria-label="Next 24 hours rain probability"></div>
+                    <div class="rain-prob-days" id="rain-prob-daily"></div>
+                    <span class="data-node-sub hidden" id="rain-prob-empty">Rain probability not available for this location.</span>
+                </div>
                 <span class="label">Rainfall History (Annual Total, mm)</span>
                 <div class="chart-container" style="height: 130px;">
                     <canvas id="rainfallHistoryChart"></canvas>
@@ -658,6 +690,112 @@
             </div>
         </aside>
 
+        <!-- Screen 9: Disasters & Hazards (Phase 1: GDACS + USGS).
+             js/disasters.js renders into this panel; everything it draws on
+             the globe is hidden by TAB_SCOPED_TEARDOWN on tab switch.
+             Layout: fixed header + controls, ONE scrolling body (list or
+             detail), fixed footer — no nested scroll areas. -->
+        <aside id="disasters-panel" class="panel right-panel glass-panel hidden">
+            <div class="panel-header-row">
+                <h2><i class="fa-solid fa-triangle-exclamation"></i> <span>Disasters &amp; Hazards</span></h2>
+                <button id="close-disasters-panel" class="panel-collapse-btn" title="Collapse panel" aria-label="Collapse panel">
+                    <i class="fa-solid fa-chevron-right"></i>
+                </button>
+            </div>
+
+            <div id="dis-list-view" class="dis-view">
+                <!-- Two sections; whichever is selected is the ONLY layer on the globe. -->
+                <div class="dis-sections" role="tablist" aria-label="Event period">
+                    <button type="button" id="dis-sec-active" class="dis-sec is-selected" role="tab" aria-selected="true">
+                        <span class="dis-sec-name">Active now</span>
+                        <span class="dis-sec-count" id="dis-count-active">…</span>
+                    </button>
+                    <button type="button" id="dis-sec-previous" class="dis-sec" role="tab" aria-selected="false">
+                        <span class="dis-sec-name">Previous</span>
+                        <span class="dis-sec-count" id="dis-count-previous">…</span>
+                    </button>
+                    <button type="button" id="dis-sec-historical" class="dis-sec" role="tab" aria-selected="false" title="Historical Extremes">
+                        <span class="dis-sec-name">Historical</span>
+                    </button>
+                </div>
+
+                <!-- Historical Extremes: nothing is plotted until an event is selected. -->
+                <div id="dis-hist-controls" class="dis-hist-controls hidden">
+                    <div class="dis-range" role="group" aria-label="Historical view">
+                        <button type="button" class="dis-hist-view is-selected" data-view="deadliest">Deadliest</button>
+                        <button type="button" class="dis-hist-view" data-view="heatwaves">Heatwaves</button>
+                        <button type="button" class="dis-hist-view" data-view="records">Record holders</button>
+                    </div>
+                    <div id="dis-era" class="dis-range dis-range-2" role="group" aria-label="Era">
+                        <button type="button" class="dis-era-btn is-selected" data-era="since1900">Since 1900</button>
+                        <button type="button" class="dis-era-btn" data-era="all">All recorded history</button>
+                    </div>
+                </div>
+
+                <div id="dis-prev-controls" class="dis-prev-controls hidden">
+                    <div class="dis-range" role="group" aria-label="Date range">
+                        <button type="button" class="dis-range-btn" data-range="7">Last 7 days</button>
+                        <button type="button" class="dis-range-btn is-selected" data-range="30">Last 30 days</button>
+                        <button type="button" class="dis-range-btn" data-range="custom">Custom</button>
+                    </div>
+                    <div id="dis-custom-range" class="dis-controls hidden">
+                        <input type="date" id="dis-start" class="dis-select" aria-label="Start date">
+                        <input type="date" id="dis-end" class="dis-select" aria-label="End date">
+                    </div>
+                </div>
+
+                <p id="dis-summary" class="dis-summary" aria-live="polite"></p>
+
+                <details id="dis-filters" class="dis-filters">
+                    <summary><span>Filters</span><span id="dis-filters-hint" class="dis-filters-hint"></span></summary>
+                    <div class="dis-filters-body">
+                        <label class="dis-field">
+                            <span>Severity</span>
+                            <select id="dis-significance" class="dis-select dis-select-narrow" aria-label="Severity">
+                                <option value="orange" selected>Red + Orange</option>
+                                <option value="red">Red only</option>
+                            </select>
+                        </label>
+                        <fieldset class="dis-hazard-list">
+                            <legend>Hazard types</legend>
+                            <label><input type="checkbox" value="flood" checked> Flood</label>
+                            <label><input type="checkbox" value="tropical_cyclone" checked> Tropical cyclone</label>
+                            <label><input type="checkbox" value="earthquake" checked> Earthquake</label>
+                            <label><input type="checkbox" value="landslide" checked> Landslide</label>
+                            <label><input type="checkbox" value="volcano" checked> Volcano</label>
+                            <label><input type="checkbox" value="drought" checked> Drought</label>
+                            <label><input type="checkbox" value="wildfire" checked> Wildfire</label>
+                        </fieldset>
+                        <label class="dis-field">
+                            <span>Earthquakes from</span>
+                            <select id="dis-eq-mag" class="dis-select dis-select-narrow">
+                                <option value="4.0">M4.0+</option>
+                                <option value="4.5">M4.5+</option>
+                                <option value="5.0" selected>M5.0+</option>
+                                <option value="6.0">M6.0+</option>
+                            </select>
+                        </label>
+                        <label class="dis-field dis-low-toggle">
+                            <input type="checkbox" id="dis-show-low">
+                            <span id="dis-show-low-label">Show low-impact events</span>
+                        </label>
+                    </div>
+                </details>
+
+                <div id="dis-list" class="dis-list"></div>
+            </div>
+
+            <div id="dis-detail-view" class="dis-view hidden">
+                <button id="dis-back" class="dis-back" type="button"><i class="fa-solid fa-arrow-left"></i> All events</button>
+                <div id="dis-detail-body"></div>
+            </div>
+
+            <details id="dis-sources" class="dis-sources">
+                <summary><span id="dis-sources-dot" class="dis-dot"></span><span>GDACS · USGS</span></summary>
+                <div id="dis-sources-body" class="dis-sources-body"></div>
+            </details>
+        </aside>
+
         <!-- Screen 8: Ask Gaia. Used to be a floating button + small chat
              bubble parked in the bottom-right corner, available on every
              tab regardless of context — moved here to be a proper 7th tab
@@ -799,12 +937,13 @@
     <!-- Scripts -->
     <script src="js/config.js"></script>
     <script src="js/state.js"></script>
-    <script src="js/api.js?v=12"></script>
-    <script src="js/ui.js?v=36"></script>
+    <script src="js/api.js?v=15"></script>
+    <script src="js/ui.js?v=46"></script>
     <script src="js/weather.js"></script>
     <script src="js/snapshot-viewer.js"></script>
-    <script src="js/globe.js?v=27"></script>
+    <script src="js/globe.js?v=36"></script>
     <script src="js/gaia.js?v=4"></script>
+    <script src="js/disasters.js?v=10"></script>
     <script src="js/report.js"></script>
     <script src="js/main.js?v=2"></script>
 </body>

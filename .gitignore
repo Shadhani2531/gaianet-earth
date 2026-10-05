@@ -1,11 +1,23 @@
-# Environment
+# Secrets — never commit real keys
 .env
 backend/.env
+
+# Python
 backend/venv/
 __pycache__/
 *.pyc
+
+# Runtime data (SQLite reports database)
 *.db
-backend/data/
+
+# Local caches (re-created automatically). NOTE: backend/data/ itself is NOT
+# ignored — backend/data/historical_baseline.json is verified source data
+# the app needs and must be committed.
+backend/data/historical_cache/*
+!backend/data/historical_cache/.gitignore
+backend/data/anomaly_baseline_cache/*
+!backend/data/anomaly_baseline_cache/.gitignore
+*.tmp
 
 # IDEs
 .vscode/

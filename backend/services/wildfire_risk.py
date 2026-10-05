@@ -109,25 +109,8 @@ def get_wildfire_risk(lat: float, lon: float) -> Dict[str, Any]:
 
 
 def _get_current_conditions(lat: float, lon: float) -> tuple[Optional[float], Optional[float], Optional[float]]:
-    """Real current temperature/humidity/wind from Open-Meteo. Returns
-    (None, None, None) on failure — no fabricated fallback numbers."""
-    try:
-        resp = requests.get(
-            _CURRENT_WEATHER_URL,
-            params={
-                "latitude": lat,
-                "longitude": lon,
-                "current": "temperature_2m,relative_humidity_2m,wind_speed_10m",
-            },
-            timeout=10,
-        )
-        resp.raise_for_status()
-        current = resp.json().get("current", {})
-        return (
-            current.get("temperature_2m"),
-            current.get("relative_humidity_2m"),
-            current.get("wind_speed_10m"),
-        )
-    except Exception as e:
-        logger.warning(f"Current-conditions fetch failed for ({lat},{lon}): {e}")
-        return None, None, None
+    """Same current reading the Insight card shows (current_conditions),
+    so temperature is consistent across tabs. (None, None, None) on failure."""
+    from services import current_conditions
+    cur = current_conditions.get_current_temperature(lat, lon) or {}
+    return cur.get("temperature_c"), cur.get("humidity_pct"), cur.get("wind_kmh")
